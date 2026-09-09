@@ -26,6 +26,12 @@ class LLaDAForMultiModalGeneration(LLaDAModelLM):
         super().__init__(config, *args, **kwargs)
     
     def forward(self, input_ids=None, labels=None, infer=False, use_cache=False, to_compute_mask=None, cat='', **kwargs):
+        attention_supervision_layers = kwargs.pop("attention_supervision_layers", None)
+        instruction_token_mask = kwargs.pop("instruction_token_mask", None)
+        source_spatial_mask = kwargs.pop("source_spatial_mask", None)
+        source_edit_mask = kwargs.pop("source_edit_mask", None)
+        attention_active = kwargs.pop("attention_active", None)
+        return_attention_auxiliary = bool(attention_supervision_layers)
         if infer:
             input_ids = input_ids.tolist()
         # ========================================================
@@ -38,12 +44,38 @@ class LLaDAForMultiModalGeneration(LLaDAModelLM):
         # attn mask
         attention_mask = create_attention_mask(original_lengths, max_tokens, self.device)
         attention_bias = (attention_mask[:, :, None] & attention_mask[:, None, :]).bool().unsqueeze(1)
+        def pad_boolean_masks(masks):
+            if masks is None:
+                return None
+            padded = [list(mask) + [False] * (max_tokens - len(mask)) for mask in masks]
+            return torch.tensor(padded, dtype=torch.bool, device=self.device)
+
+        instruction_token_mask = pad_boolean_masks(instruction_token_mask)
+        source_spatial_mask = pad_boolean_masks(source_spatial_mask)
+        source_edit_mask = pad_boolean_masks(source_edit_mask)
+        if attention_active is not None:
+            attention_active = torch.as_tensor(attention_active, dtype=torch.bool, device=self.device)
         # ========================================================
         # model output 
         # ========================================================
-        output = LLaDAModelLM.forward(self, input_ids=input_ids, attention_bias=attention_bias, use_cache=use_cache, to_compute_mask=to_compute_mask, cat=cat)
+        output = LLaDAModelLM.forward(
+            self,
+            input_ids=input_ids,
+            attention_bias=attention_bias,
+            use_cache=use_cache,
+            to_compute_mask=to_compute_mask,
+            cat=cat,
+            attention_supervision_layers=attention_supervision_layers,
+            instruction_token_mask=instruction_token_mask,
+            source_spatial_mask=source_spatial_mask,
+            source_edit_mask=source_edit_mask,
+            attention_active=attention_active,
+            return_attention_auxiliary=return_attention_auxiliary,
+        )
+        if return_attention_auxiliary:
+            output, attention_auxiliary = output
         if infer:
-            return output
+            return (output, attention_auxiliary) if return_attention_auxiliary else output
         
         # ========================================================
         # padding label batch len & loss
@@ -52,7 +84,7 @@ class LLaDAForMultiModalGeneration(LLaDAModelLM):
         labels = torch.tensor(labels, dtype=torch.int64, device=self.device)
         logits = output.logits
         loss = F.cross_entropy(logits.contiguous().view(-1, logits.shape[-1]), labels.contiguous().view(-1), ignore_index=-100,)
-        return loss
+        return (loss, attention_auxiliary) if return_attention_auxiliary else loss
     
     def get_fsdp_wrap_module_list(self) -> List:
         modules = [*list(self.model.transformer.blocks), self.model.transformer.ff_out]

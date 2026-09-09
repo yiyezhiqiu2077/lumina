@@ -31,6 +31,8 @@ from transformers.modeling_outputs import CausalLMOutputWithPast
 from transformers.models.auto import AutoModel
 from transformers.cache_utils import Cache
 
+from attention_supervision.attention_loss import layer_attention_auxiliary
+
 from .configuration_llada import (
     LLaDAConfig,
     StrEnum,
@@ -653,6 +655,8 @@ class LLaDABlock(nn.Module):
         Computes scaled dot product attention on query, key and value tensors, using an optional
         attention mask if passed, and applying dropout if a probability greater than 0.0 is specified.
         """
+        if attn_mask is not None or is_causal:
+            raise AssertionError("Lumina-DiMOO runtime audit requires attn_mask=None and is_causal=False")
         if self.flash_attn_func is not None and attn_mask is None:
             r = self.flash_attn_func(
                 q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), dropout_p=dropout_p, causal=False
@@ -686,7 +690,11 @@ class LLaDABlock(nn.Module):
         attention_bias: Optional[torch.Tensor] = None,
         layer_past: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         to_compute_mask = None,
-    ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+        instruction_token_mask: Optional[torch.Tensor] = None,
+        source_spatial_mask: Optional[torch.Tensor] = None,
+        source_edit_mask: Optional[torch.Tensor] = None,
+        attention_active: Optional[torch.Tensor] = None,
+    ):
         B, T, C = q.size()  # batch size, sequence length, d_model
         dtype = k.dtype
 
@@ -715,6 +723,19 @@ class LLaDABlock(nn.Module):
             to_compute_index = to_compute_mask.nonzero(as_tuple=True)[1] if self.use_cache and to_compute_mask is not None else None
             q, k = self.rotary_emb(q, k, q_mask=to_compute_index)
 
+        auxiliary = None
+        if instruction_token_mask is not None:
+            if source_spatial_mask is None or source_edit_mask is None or attention_active is None:
+                raise ValueError("all attention-supervision masks must be provided together")
+            auxiliary = layer_attention_auxiliary(
+                q,
+                k,
+                instruction_token_mask,
+                source_spatial_mask,
+                source_edit_mask,
+                attention_active,
+            )
+
         if attention_bias is not None:
             # Resize and cast attention bias.
             # The current dtype of the attention bias might not match the dtype that the SDP attn function will
@@ -741,7 +762,8 @@ class LLaDABlock(nn.Module):
         att = att.transpose(1, 2).contiguous().view(B, T, C)
 
         # Apply output projection.
-        return self.attn_out(att), None
+        output = self.attn_out(att)
+        return (output, None, auxiliary) if auxiliary is not None else (output, None)
 
     @abstractmethod
     def forward(
@@ -911,7 +933,11 @@ class LLaDALlamaBlock(LLaDABlock):
         use_cache: bool = False,
         cat = 'cond',
         to_compute_mask = None,
-    ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+        instruction_token_mask: Optional[torch.Tensor] = None,
+        source_spatial_mask: Optional[torch.Tensor] = None,
+        source_edit_mask: Optional[torch.Tensor] = None,
+        attention_active: Optional[torch.Tensor] = None,
+    ):
         # Get query, key, value projections.
         # shape:
         #  - for regular attn q, k, v: (batch_size, seq_len, d_model)
@@ -940,13 +966,25 @@ class LLaDALlamaBlock(LLaDABlock):
                 self.cache['v'][cat] = v
 
         # Get attention scores.
+        attention_kwargs = dict(
+            layer_past=layer_past,
+            to_compute_mask=to_compute_mask,
+            instruction_token_mask=instruction_token_mask,
+            source_spatial_mask=source_spatial_mask,
+            source_edit_mask=source_edit_mask,
+            attention_active=attention_active,
+        )
         if self._activation_checkpoint_fn is not None:
-            att, cache = self._activation_checkpoint_fn(  # type: ignore
-                self.attention, q, k, v, attention_bias, layer_past=layer_past, use_cache=use_cache
+            attention_result = self._activation_checkpoint_fn(  # type: ignore
+                self.attention, q, k, v, attention_bias, **attention_kwargs
             )
         else:
-            att, cache = self.attention(q, k, v, attention_bias, layer_past=layer_past, 
-                                        to_compute_mask=to_compute_mask)
+            attention_result = self.attention(q, k, v, attention_bias, **attention_kwargs)
+        if instruction_token_mask is None:
+            att, cache = attention_result
+            auxiliary = None
+        else:
+            att, cache, auxiliary = attention_result
 
         # Add attention scores.
         # shape: (B, T, C)
@@ -969,7 +1007,7 @@ class LLaDALlamaBlock(LLaDABlock):
         x = self.dropout(x)
         x = og_x + x
 
-        return x, cache
+        return (x, cache, auxiliary) if auxiliary is not None else (x, cache)
 
 
 class LLaDAOutput(NamedTuple):
@@ -988,6 +1026,9 @@ class LLaDAOutput(NamedTuple):
     """
     Hidden states from each block.
     """
+
+    attention_auxiliary: Optional[torch.Tensor]
+    """Per-layer [spatial CE, conditional mass, entropy, full-attention mass, active count]."""
 
 
 class LLaDAGenerateOutput(NamedTuple):
@@ -1210,6 +1251,11 @@ class LLaDAModel(nn.Module):
         use_cache = False,
         to_compute_mask = None,
         cat = '',
+        attention_supervision_layers: Optional[Sequence[int]] = None,
+        instruction_token_mask: Optional[torch.Tensor] = None,
+        source_spatial_mask: Optional[torch.Tensor] = None,
+        source_edit_mask: Optional[torch.Tensor] = None,
+        attention_active: Optional[torch.Tensor] = None,
     ) -> LLaDAOutput:
         """
         :param input_ids: A tensor of shape `(batch_size, seq_len)`.
@@ -1327,6 +1373,12 @@ class LLaDAModel(nn.Module):
 
         # decoder layers
         all_hidden_states = []
+        attention_auxiliaries = []
+        selected_attention_layers = set(attention_supervision_layers or ())
+        if selected_attention_layers and self.config.block_group_size != 1:
+            raise NotImplementedError("attention supervision currently requires block_group_size == 1")
+        if selected_attention_layers and not selected_attention_layers.issubset(set(range(self.config.n_layers))):
+            raise ValueError(f"invalid attention-supervision layers: {sorted(selected_attention_layers)}")
 
         # Apply blocks one-by-one.
         if self.config.block_group_size == 1:
@@ -1352,16 +1404,30 @@ class LLaDAModel(nn.Module):
                     )
                 ):
                     # shape: (batch_size, seq_len, d_model)
-                    x, _ = self._activation_checkpoint_fn(
-                        block, x, attention_bias=attention_bias, layer_past=layer_past, 
-                        to_compute_mask=to_compute_mask, use_cache=use_cache, cat=cat
+                    block_result = self._activation_checkpoint_fn(
+                        block, x, attention_bias=attention_bias, layer_past=layer_past,
+                        to_compute_mask=to_compute_mask, use_cache=use_cache, cat=cat,
+                        instruction_token_mask=instruction_token_mask if block_idx in selected_attention_layers else None,
+                        source_spatial_mask=source_spatial_mask if block_idx in selected_attention_layers else None,
+                        source_edit_mask=source_edit_mask if block_idx in selected_attention_layers else None,
+                        attention_active=attention_active if block_idx in selected_attention_layers else None,
                     )
                 else:
                     # shape: (batch_size, seq_len, d_model)
                     LLaDALlamaBlock.forward
-                    x, _ = block(x, attention_bias=attention_bias, layer_past=layer_past, 
-                        to_compute_mask=to_compute_mask, use_cache=use_cache, cat=cat
+                    block_result = block(
+                        x, attention_bias=attention_bias, layer_past=layer_past,
+                        to_compute_mask=to_compute_mask, use_cache=use_cache, cat=cat,
+                        instruction_token_mask=instruction_token_mask if block_idx in selected_attention_layers else None,
+                        source_spatial_mask=source_spatial_mask if block_idx in selected_attention_layers else None,
+                        source_edit_mask=source_edit_mask if block_idx in selected_attention_layers else None,
+                        attention_active=attention_active if block_idx in selected_attention_layers else None,
                     )
+                if block_idx in selected_attention_layers:
+                    x, _, auxiliary = block_result
+                    attention_auxiliaries.append(auxiliary)
+                else:
+                    x, _ = block_result
         else:
             for group_idx, block_group in enumerate(self.transformer.block_groups):
                 if output_hidden_states:
@@ -1412,7 +1478,13 @@ class LLaDAModel(nn.Module):
             else:
                 self.logit_cache[cat] = logits
 
-        return LLaDAOutput(logits=logits, attn_key_values=attn_key_values, hidden_states=tuple(all_hidden_states) if output_hidden_states else None)  # type: ignore[arg-type]
+        attention_auxiliary = torch.stack(attention_auxiliaries) if attention_auxiliaries else None
+        return LLaDAOutput(
+            logits=logits,
+            attn_key_values=attn_key_values,
+            hidden_states=tuple(all_hidden_states) if output_hidden_states else None,
+            attention_auxiliary=attention_auxiliary,
+        )  # type: ignore[arg-type]
     
     def caching(self, enable: bool = True):
         LLaDABlock.caching
@@ -1474,6 +1546,12 @@ class LLaDAModelLM(PreTrainedModel):
         use_cache = False,
         to_compute_mask = None,
         cat = '',
+        attention_supervision_layers: Optional[Sequence[int]] = None,
+        instruction_token_mask: Optional[torch.Tensor] = None,
+        source_spatial_mask: Optional[torch.Tensor] = None,
+        source_edit_mask: Optional[torch.Tensor] = None,
+        attention_active: Optional[torch.Tensor] = None,
+        return_attention_auxiliary: bool = False,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         if output_attentions:
             raise ValueError("output_attentions is not yet supported in LLaDA")
@@ -1491,6 +1569,11 @@ class LLaDAModelLM(PreTrainedModel):
             use_cache=use_cache,
             to_compute_mask=to_compute_mask,
             cat=cat,
+            attention_supervision_layers=attention_supervision_layers,
+            instruction_token_mask=instruction_token_mask,
+            source_spatial_mask=source_spatial_mask,
+            source_edit_mask=source_edit_mask,
+            attention_active=attention_active,
         )
 
         logits = outputs.logits
@@ -1504,11 +1587,12 @@ class LLaDAModelLM(PreTrainedModel):
             output = (logits,) + outputs[1:]
             return (loss,) + output if loss is not None else output
 
-        return CausalLMOutputWithPast(
+        hf_output = CausalLMOutputWithPast(
             logits=logits,
             past_key_values=outputs.attn_key_values,
             hidden_states=hidden_states,
         )
+        return (hf_output, outputs.attention_auxiliary) if return_attention_auxiliary else hf_output
 
     def can_generate(self) -> bool:
         return True
