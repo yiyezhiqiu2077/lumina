@@ -1,3 +1,48 @@
+# Lumina-DiMOO MagicBrush GCE experiments
+
+This branch is the reproducible MagicBrush CE/GCE package. Its shared
+experiment baseline is `1475c9739cd6f5e2dacabbd82f907e71504e7109`.
+`experiment/gce` provides B0-CE and G1-GCE; full-attention supervision and
+ML-Cache are not included.
+
+## Quick start
+
+```bash
+git clone git@github.com:yiyezhiqiu2077/lumina.git
+cd lumina
+git switch experiment/gce
+uv sync --extra dev
+
+export MODEL_PATH=/path/to/Lumina-DiMOO
+export DATA_ROOT=/path/to/MagicBrush
+export OUTPUT_ROOT=/path/to/lumina_outputs
+export GCE_CLUSTER_PATH=/path/to/gce_clusters_1024_512.pt
+
+bash scripts/check_dataset.sh
+bash scripts/smoke_gce.sh
+```
+
+The smoke test runs 10 optimizer steps, saves a checkpoint, then starts a new
+process that restores it and completes steps 11-12. For formal CE or GCE runs:
+
+```bash
+bash scripts/train_magicbrush_ce.sh
+bash scripts/train_magicbrush_gce.sh
+```
+
+The scripts derive `DATA_CONFIG` from
+`$DATA_ROOT/official_tokens/train/manifest.jsonl` unless it is set explicitly.
+They derive output directories from `OUTPUT_ROOT`; set `OUTPUT_DIR` only to
+override the branch-specific default. Resume GCE in a new process with
+`RESUME_FROM_CHECKPOINT=/path/to/checkpoint-000500 bash scripts/train_magicbrush_gce.sh`.
+
+See [ENVIRONMENT.md](ENVIRONMENT.md), [docs/DATASET.md](docs/DATASET.md),
+[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md),
+[docs/DISTRIBUTED.md](docs/DISTRIBUTED.md), and
+[configs/paths.example.yaml](configs/paths.example.yaml) before migration.
+
+---
+
 <p align="center">
  <img src="./assets/Lumina-DiMOO.png" width="20%"/>
 </p>
@@ -387,6 +432,4 @@ This work was also supported and implemented by [MindSpeed MM](https://gitee.com
   year={2025}
 }
 ```
-
-
 
