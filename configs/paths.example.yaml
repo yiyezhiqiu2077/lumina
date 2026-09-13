@@ -1,0 +1,6 @@
+# Copy this file outside Git and replace every placeholder for the target cluster.
+model_path: /path/to/Lumina-DiMOO
+data_root: /path/to/MagicBrush
+data_config: /path/to/MagicBrush/official_tokens/train/manifest.jsonl
+output_root: /path/to/lumina_magicbrush_outputs
+gce_cluster_path: /path/to/gce_clusters_1024_512.pt
