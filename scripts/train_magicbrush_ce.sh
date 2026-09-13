@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+: "${MODEL_PATH:?MODEL_PATH is required}"
+: "${DATA_CONFIG:?DATA_CONFIG must be the pre-tokenized MagicBrush train manifest}"
+: "${OUTPUT_DIR:?OUTPUT_DIR is required}"
+CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3}" \
+"${TORCHRUN:-torchrun}" --standalone --nproc_per_node="${NPROC_PER_NODE:-4}" \
+  "$ROOT/tools/smoke_gce_ddp.py" \
+  --model "$MODEL_PATH" --manifest "$DATA_CONFIG" --output "$OUTPUT_DIR" \
+  --batch-size "${BATCH_SIZE_PER_GPU:-4}" --accum "${GRAD_ACCUM:-2}" \
+  --steps "${MAX_STEPS:-2200}" --save-every "${SAVE_EVERY:-500}" \
+  --max-seq-len "${MAX_SEQ_LEN:-3072}" --seed "${SEED:-42}"
