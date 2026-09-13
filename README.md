@@ -18,8 +18,8 @@ export MODEL_PATH=/path/to/Lumina-DiMOO
 export DATA_ROOT=/path/to/MagicBrush
 export OUTPUT_ROOT=/path/to/lumina_outputs
 
-bash scripts/check_dataset.sh
-bash scripts/smoke_attention_loss.sh
+uv run bash scripts/check_dataset.sh
+uv run bash scripts/smoke_attention_loss.sh
 ```
 
 The smoke test runs 10 optimizer steps, saves a checkpoint, then starts a new
@@ -27,7 +27,7 @@ process that restores it and completes steps 11-12. Start the formal A1 run:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1 NPROC_PER_NODE=2 \
-bash scripts/train_magicbrush_attention_loss.sh
+uv run bash scripts/train_magicbrush_attention_loss.sh
 ```
 
 The script defaults to `DATA_CONFIG=$DATA_ROOT/official_tokens/train/manifest.jsonl`
@@ -36,7 +36,7 @@ Resume is always a new process, for example:
 
 ```bash
 RESUME_FROM_CHECKPOINT=/path/to/checkpoint-000275 \
-bash scripts/train_magicbrush_attention_loss.sh
+uv run bash scripts/train_magicbrush_attention_loss.sh
 ```
 
 See [ENVIRONMENT.md](ENVIRONMENT.md), [docs/DATASET.md](docs/DATASET.md),
@@ -435,4 +435,3 @@ This work was also supported and implemented by [MindSpeed MM](https://gitee.com
   year={2025}
 }
 ```
-
