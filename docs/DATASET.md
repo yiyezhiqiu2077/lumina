@@ -62,7 +62,9 @@ mask 126336, BOI 126349, EOI 126350, newline 126084, answer-start 126354, and
 answer-end 126355. A conditional sequence is text with the source image inserted
 before the final text token, followed by answer-start, BOI, masked target image
 tokens with row-ending newline tokens, EOI, and answer-end. Training supervises
-only selected target visual tokens. The formal experiments use `max_seq_len=3072`.
+only selected target visual tokens. The GCE trainer passes `max_seq_len=3072`;
+the current attention trainer leaves the dataset default at `5120` (the audited
+source sequences are about 2.1k tokens).
 
 Run a lightweight integrity check before training:
 

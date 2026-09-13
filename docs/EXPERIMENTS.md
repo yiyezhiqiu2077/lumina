@@ -11,4 +11,5 @@ Full-attention supervision and ML-Cache are intentionally outside these branches
 
 All listed runs use BF16, seed 42, AdamW betas `(0.9, 0.95)`, weight decay
 0.1, LoRA rank/alpha 16/16, LoRA dropout 0.05, and gradient clip 4.0. GCE uses
-batch 4/GPU with accumulation 2. Attention uses batch 8/GPU with accumulation 4.
+batch 4/GPU with accumulation 2 and `max_seq_len=3072`. Attention uses batch
+8/GPU with accumulation 4 and its current dataset default `max_seq_len=5120`.

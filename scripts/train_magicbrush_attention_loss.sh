@@ -3,8 +3,14 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${MODEL_PATH:?MODEL_PATH is required}"
-: "${DATA_CONFIG:?DATA_CONFIG must be the pre-tokenized MagicBrush train manifest}"
-: "${OUTPUT_DIR:?OUTPUT_DIR is required}"
+: "${DATA_ROOT:?DATA_ROOT is required}"
+: "${OUTPUT_ROOT:?OUTPUT_ROOT is required}"
+DATA_CONFIG="${DATA_CONFIG:-$DATA_ROOT/official_tokens/train/manifest.jsonl}"
+OUTPUT_DIR="${OUTPUT_DIR:-$OUTPUT_ROOT/A1-ATTN}"
+echo "experiment_id=A1-ATTN commit=$(git -C "$ROOT" rev-parse --short HEAD) host=$(hostname)"
+echo "config=$ROOT/configs/experiments/magicbrush_attention.yaml"
+echo "MODEL_PATH=$MODEL_PATH DATA_ROOT=$DATA_ROOT DATA_CONFIG=$DATA_CONFIG OUTPUT_ROOT=$OUTPUT_ROOT OUTPUT_DIR=$OUTPUT_DIR"
+nvidia-smi --query-gpu=index,name,memory.total --format=csv,noheader || true
 
 resume_args=()
 if [[ -n "${RESUME_FROM_CHECKPOINT:-}" ]]; then
@@ -12,6 +18,7 @@ if [[ -n "${RESUME_FROM_CHECKPOINT:-}" ]]; then
 fi
 
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}" \
+PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" \
 "${TORCHRUN:-torchrun}" --standalone --nproc_per_node="${NPROC_PER_NODE:-2}" \
   "$ROOT/train/train_magicbrush_attention.py" \
   --model "$MODEL_PATH" --train-manifest "$DATA_CONFIG" --output "$OUTPUT_DIR" \
