@@ -18,23 +18,23 @@ export DATA_ROOT=/path/to/MagicBrush
 export OUTPUT_ROOT=/path/to/lumina_outputs
 export GCE_CLUSTER_PATH=/path/to/gce_clusters_1024_512.pt
 
-bash scripts/check_dataset.sh
-bash scripts/smoke_gce.sh
+uv run bash scripts/check_dataset.sh
+uv run bash scripts/smoke_gce.sh
 ```
 
 The smoke test runs 10 optimizer steps, saves a checkpoint, then starts a new
 process that restores it and completes steps 11-12. For formal CE or GCE runs:
 
 ```bash
-bash scripts/train_magicbrush_ce.sh
-bash scripts/train_magicbrush_gce.sh
+uv run bash scripts/train_magicbrush_ce.sh
+uv run bash scripts/train_magicbrush_gce.sh
 ```
 
 The scripts derive `DATA_CONFIG` from
 `$DATA_ROOT/official_tokens/train/manifest.jsonl` unless it is set explicitly.
 They derive output directories from `OUTPUT_ROOT`; set `OUTPUT_DIR` only to
 override the branch-specific default. Resume GCE in a new process with
-`RESUME_FROM_CHECKPOINT=/path/to/checkpoint-000500 bash scripts/train_magicbrush_gce.sh`.
+`RESUME_FROM_CHECKPOINT=/path/to/checkpoint-000500 uv run bash scripts/train_magicbrush_gce.sh`.
 
 See [ENVIRONMENT.md](ENVIRONMENT.md), [docs/DATASET.md](docs/DATASET.md),
 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md),
@@ -432,4 +432,3 @@ This work was also supported and implemented by [MindSpeed MM](https://gitee.com
   year={2025}
 }
 ```
-

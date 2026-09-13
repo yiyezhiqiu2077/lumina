@@ -69,5 +69,5 @@ source sequences are about 2.1k tokens).
 Run a lightweight integrity check before training:
 
 ```bash
-DATA_ROOT=/path/to/MagicBrush bash scripts/check_dataset.sh
+DATA_ROOT=/path/to/MagicBrush uv run bash scripts/check_dataset.sh
 ```
