@@ -39,7 +39,10 @@ class LLaDAForMultiModalGeneration(LLaDAModelLM):
         # ========================================================
         max_tokens = max([len(_) for _ in input_ids])
         original_lengths = [len(example) for example in input_ids] # every sample len --> record for attention mask
-        input_ids = [example + [0] * (max_tokens - len(example)) for example in input_ids] # padding 0 to right --> max length
+        input_ids = [
+            example + [self.config.pad_token_id] * (max_tokens - len(example))
+            for example in input_ids
+        ]
         input_ids = torch.tensor(input_ids, dtype=torch.int64, device=self.device) 
         # attn mask
         attention_mask = create_attention_mask(original_lengths, max_tokens, self.device)
