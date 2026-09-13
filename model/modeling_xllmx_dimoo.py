@@ -8,6 +8,7 @@ from torch import nn
 from transformers import AutoTokenizer, AutoConfig
 from .modeling_llada import LLaDAModelLM
 from .configuration_llada import LLaDAConfig
+from .gce_loss import GroupedCrossEntropyLoss
 from transformers.modeling_outputs import CausalLMOutputWithPast
 __all__ = ["LLaDAForMultiModalGeneration"]
 
@@ -24,8 +25,15 @@ class LLaDAForMultiModalGeneration(LLaDAModelLM):
     def __init__(self, config: LLaDAConfig, *args, **kwargs):
         print(f"Initializing MMadaModelLM with config: {config}")
         super().__init__(config, *args, **kwargs)
+        self.gce_loss = None
+
+    def configure_gce(self, cluster_path, levels=(1024, 512)):
+        self.gce_loss = GroupedCrossEntropyLoss.from_file(str(cluster_path), tuple(levels)).to(self.device)
     
     def forward(self, input_ids=None, labels=None, infer=False, use_cache=False, to_compute_mask=None, cat='', **kwargs):
+        use_gce = kwargs.pop("use_gce", False)
+        gce_weight = kwargs.pop("gce_weight", 1.0)
+        gce_logit_grad_probe = kwargs.pop("gce_logit_grad_probe", False)
         attention_supervision_layers = kwargs.pop("attention_supervision_layers", None)
         instruction_token_mask = kwargs.pop("instruction_token_mask", None)
         source_spatial_mask = kwargs.pop("source_spatial_mask", None)
@@ -84,6 +92,21 @@ class LLaDAForMultiModalGeneration(LLaDAModelLM):
         labels = torch.tensor(labels, dtype=torch.int64, device=self.device)
         logits = output.logits
         loss = F.cross_entropy(logits.contiguous().view(-1, logits.shape[-1]), labels.contiguous().view(-1), ignore_index=-100,)
+        if use_gce:
+            if self.gce_loss is None:
+                raise RuntimeError("use_gce=True requires model.configure_gce(cluster_path) before DDP wrapping")
+            offset, codebook_size = 126356, 8192
+            image_valid = (labels != -100) & (labels >= offset) & (labels < offset + codebook_size)
+            image_logits = logits[image_valid][:, offset : offset + codebook_size]
+            image_targets = labels[image_valid] - offset
+            gce, per_level = self.gce_loss(image_logits, image_targets)
+            total = loss + gce_weight * gce
+            metrics = {"ce_loss": loss.detach(), "gce_loss": gce.detach(), **{f"gce_loss_k{k}": v.detach() for k, v in per_level.items()}, "image_token_count": image_valid.sum().detach()}
+            if gce_logit_grad_probe:
+                ce_grad = torch.autograd.grad(loss, logits, retain_graph=True)[0]
+                gce_grad = torch.autograd.grad(gce, logits, retain_graph=True)[0]
+                metrics["gce_to_ce_logit_grad_norm"] = gce_grad.float().norm().detach() / ce_grad.float().norm().detach().clamp_min(1e-12)
+            return total, metrics
         return (loss, attention_auxiliary) if return_attention_auxiliary else loss
     
     def get_fsdp_wrap_module_list(self) -> List:

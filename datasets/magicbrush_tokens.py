@@ -69,13 +69,19 @@ class MagicBrushTokenDataset(Dataset):
         self.condition_dropout = condition_dropout
         self.seed = seed
         self.fixed_corruption = fixed_corruption
+        self.epoch = 0
         self.system_prompt = create_prompt_templates()["image_editing"]
 
     def __len__(self):
         return len(self.rows)
 
+    def set_epoch(self, epoch: int):
+        self.epoch = int(epoch)
+
     def _rng(self, index: int) -> random.Random:
-        return random.Random(self.seed + index) if self.fixed_corruption else random
+        # Per-sample randomness is independent of DataLoader worker scheduling and
+        # is matched exactly by CE and GCE runs when epoch/order/seed match.
+        return random.Random(self.seed + 1_000_003 * self.epoch + index)
 
     def __getitem__(self, index: int) -> dict:
         row = self.rows[index]
