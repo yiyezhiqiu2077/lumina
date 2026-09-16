@@ -30,7 +30,17 @@ py-modules = ["config"]
 
 [tool.setuptools.packages.find]
 where = ["src", "."]
-include = ["lumina_dimoo*", "model*", "datasets*", "attention_supervision*", "objectives*", "training*", "utils*", "xllmx*"]
+include = ["dataset*", "models*", "training*", "utils*", "model*", "datasets*", "generators*", "xllmx*"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu121" }
+torchvision = { index = "pytorch-cu121" }
+torchaudio = { index = "pytorch-cu121" }
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

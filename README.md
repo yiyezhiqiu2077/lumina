@@ -26,7 +26,7 @@ export DATA_ROOT=/path/to/MagicBrush
 export OUTPUT_ROOT=/path/to/lumina_outputs
 ```
 
-请先按 [ENVIRONMENT.md](ENVIRONMENT.md) 安装 CUDA 对应的 PyTorch。数据根目录应包含
+`uv sync` 会按项目锁定的 PyTorch CUDA 12.1 wheel index 安装依赖。数据根目录应包含
 `official_tokens/train/manifest.jsonl`；模型权重、MagicBrush 数据、GCE cluster、日志和
 checkpoint 均不在 Git 中。
 
@@ -64,12 +64,44 @@ uv run python scripts/train/train.py --config configs/train/magicbrush_gce.yaml 
 - [configs/train/magicbrush_attention.yaml](configs/train/magicbrush_attention.yaml)
 - [configs/train/magicbrush_gce.yaml](configs/train/magicbrush_gce.yaml)
 
+## 数据与工具
+
+数据准备和 tokenization 共用 `src/dataset/` 的实现：
+
+```bash
+# 从原始 MagicBrush manifest 创建固定的 train/val/probe manifest
+uv run python scripts/data/preprocess_magicbrush.py prepare \
+  --train-manifest /path/to/train.jsonl --output /path/to/prepared
+
+# 用本地 Lumina VQ-VAE 预编码上述 manifest
+uv run python scripts/data/preprocess_magicbrush.py pretokenize \
+  --manifest /path/to/prepared/train.jsonl --model "$MODEL_PATH" --output /path/to/tokens
+
+# 检查图像/VQ 几何、序列契约和非方形 token 布局
+uv run python scripts/data/check_magicbrush.py all \
+  --manifest /path/to/tokens/manifest.jsonl --model "$MODEL_PATH" --output /path/to/audit
+```
+
+GCE cluster 是独立数据资产，不会提交到 Git。使用工具生成和检查：
+
+```bash
+uv run python scripts/tools/gce/build_clusters.py --model "$MODEL_PATH" --output /path/to/gce_clusters_1024_512.pt
+uv run python scripts/tools/gce/inspect_clusters.py --model "$MODEL_PATH" --clusters /path/to/gce_clusters_1024_512.pt
+uv run python scripts/tools/gce/probe_scale.py --model "$MODEL_PATH" --manifest /path/to/tokens/manifest.jsonl --clusters /path/to/gce_clusters_1024_512.pt
+```
+
+attention layer calibration 位于 `scripts/tools/attention/calibrate_layers.py`。hard-lock 评测与
+评测 manifest 预处理位于 `scripts/eval/`。
+
 ## Repository Structure
 
 - `src/dataset/`：MagicBrush 训练数据与稳定 corruption。
 - `src/models/`：Lumina 模型、attention 与 GCE objective 的唯一实现。
 - `src/training/`：LoRA、objective dispatch、checkpoint、DDP 与配置加载。
 - `scripts/train/train.py`：唯一正式 MagicBrush 训练入口。
+- `scripts/data/`：MagicBrush 数据准备与契约检查 CLI。
+- `scripts/tools/gce/`：GCE cluster 构建、检查和尺度诊断 CLI；损失实现不在脚本中。
+- `scripts/eval/`：MagicBrush 评测工作流。
 - `configs/`：训练、数据和 distributed specification。
 - `tests/`：按 data/models/objectives/training 分层的 regression tests。
 
