@@ -218,7 +218,9 @@ def plot_comparison(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", nargs="?", choices=("compare",), default="plot")
+    # Keep regular plotting as the default while reserving the optional
+    # positional subcommand for a three-objective comparison.
+    parser.add_argument("mode", nargs="?", choices=("plot", "compare"), default="plot")
     parser.add_argument("--input", type=Path, help="Path to one train_metrics.jsonl file")
     parser.add_argument("--objective", choices=tuple(OBJECTIVE_METRICS))
     parser.add_argument("--ce", type=Path, help="CE train_metrics.jsonl for compare mode")

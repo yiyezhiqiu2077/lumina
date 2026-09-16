@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -63,3 +64,19 @@ def test_compare_mode_creates_generation_loss_plot(tmp_path: Path):
         steps_per_epoch=2, smooth_window=2, output=tmp_path / "comparison",
     )
     assert generated.is_file() and generated.stat().st_size > 0
+
+
+def test_cli_defaults_to_regular_plot_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    metrics = _write_metrics(tmp_path / "ce.jsonl", "ce")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(MODULE_PATH),
+            "--input", str(metrics),
+            "--objective", "ce",
+            "--output", str(tmp_path / "cli-output"),
+        ],
+    )
+    args = PLOT.parse_args()
+    assert args.mode == "plot"
