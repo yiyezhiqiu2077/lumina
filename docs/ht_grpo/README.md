@@ -5,7 +5,7 @@
 **Code and technical report will be released soon.**
 
 <p align="center">
-  <img src="./assets/insight-1.png" width="95%"/>
+  <img src="../../assets/ht_grpo/insight-1.png" width="95%"/>
 </p>
 
 ## Method
@@ -17,19 +17,19 @@ HT-GRPO uses a **Sketch-Then-Paint** training scheme:
 - **Refinement**: polish local details after the structure is stable.
 
 <p align="center">
-  <img src="./assets/method-1.png" width="95%"/>
+  <img src="../../assets/ht_grpo/method-1.png" width="95%"/>
 </p>
 
 ## Cases
 
 <details open>
   <summary>Counting and Spatial Grounding</summary>
-  <img src="./assets/demo-1.png" width="95%"/>
+  <img src="../../assets/ht_grpo/demo-1.png" width="95%"/>
 </details>
 
 <details open>
   <summary>GenEval Qualitative Comparison</summary>
-  <img src="./assets/demo2-1.png" width="95%"/>
+  <img src="../../assets/ht_grpo/demo2-1.png" width="95%"/>
 </details>
 
 ## Experiments
@@ -38,12 +38,12 @@ HT-GRPO improves both **MMaDA** and **Lumina-DiMOO** on GenEval and DPG-Bench.
 
 <details open>
   <summary>GenEval Benchmark</summary>
-  <img src="./assets/main.png" width="95%"/>
+  <img src="../../assets/ht_grpo/main.png" width="95%"/>
 </details>
 
 <details open>
   <summary>DPG-Bench and Preference Metrics</summary>
-  <img src="./assets/2.png" width="95%"/>
+  <img src="../../assets/ht_grpo/2.png" width="95%"/>
 </details>
 
 ## Acknowledgement

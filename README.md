@@ -1,5 +1,17 @@
 # Lumina-DiMOO：统一 MagicBrush 训练
 
+## Repository Layout
+
+- 实现：`src/`
+- 可执行工作流：`scripts/`
+- 实验与运行配置：`configs/`
+- 文档：`docs/`
+- 静态资产：`assets/`
+- vendored third-party：`third_party/`
+
+当前依赖方向和 package 职责见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，环境说明见
+[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)。
+
 本仓库的 `main` 只维护一份 MagicBrush 训练框架，通过唯一的 objective 模式隔离三种
 实验：
 
@@ -92,6 +104,24 @@ uv run python scripts/tools/gce/probe_scale.py --model "$MODEL_PATH" --manifest 
 
 attention layer calibration 位于 `scripts/tools/attention/calibrate_layers.py`。hard-lock 评测与
 评测 manifest 预处理位于 `scripts/eval/`。
+
+## Upstream SFT 与推理
+
+原始 Lumina SFT 依赖单独的 upstream extra：
+
+```bash
+uv sync --extra upstream
+uv run python scripts/train/upstream/train.py --help
+```
+
+上游 SFT 的示例数据配置在 `configs/upstream/data.yaml`。推理入口为：
+
+```bash
+uv run python scripts/inference/t2i.py --help
+uv run python scripts/inference/i2i.py --help
+uv run python scripts/inference/mmu.py --help
+uv run python scripts/inference/t2i_ddp.py --help
+```
 
 ## Repository Structure
 
