@@ -333,7 +333,7 @@ def main():
             elif args.objective == "gce":
                 sums["gce_loss"] += result.gce_loss.detach().float()
                 for key, value in result.gce_metrics.items():
-                    if key in sums:
+                    if key in sums and key != "gce_loss":
                         sums[key] += value.detach().float()
 
             micro_step += 1
