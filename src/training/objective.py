@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 import torch
 
-from lumina_dimoo.models import MagicBrushModelOutput
+from models.lumina.modeling_xllmx_dimoo import MagicBrushModelOutput
 
 OBJECTIVE_MODES = ("ce", "attention", "gce")
 

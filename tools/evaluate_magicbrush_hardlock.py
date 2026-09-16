@@ -14,11 +14,11 @@ from diffusers import VQModel
 from PIL import Image
 from transformers import AutoTokenizer
 
-from attention_supervision.lora import inject_lora, load_lora_state_dict
+from training.lora import inject_lora, load_lora_state_dict
 from config import SPECIAL_TOKENS
 from datasets.magicbrush_dataset import SharedGeometry, apply_shared_geometry, read_jsonl, write_jsonl
 from generators.masked_image_edit_generator import generate_i2i_gt_mask_hard_lock
-from model import LLaDAForMultiModalGeneration
+from models.lumina.modeling_xllmx_dimoo import LLaDAForMultiModalGeneration
 from utils.image_utils import add_break_line, decode_vq_to_image
 from utils.prompt_utils import create_prompt_templates
 

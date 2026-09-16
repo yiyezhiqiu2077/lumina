@@ -9,7 +9,7 @@ import numpy as np
 from transformers import AutoTokenizer
 
 from config import SPECIAL_TOKENS
-from datasets.magicbrush_tokens import MagicBrushTokenDataset
+from dataset.magicbrush import MagicBrushTokenDataset
 
 
 def parse_args():

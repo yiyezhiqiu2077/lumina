@@ -13,7 +13,7 @@ The canonical implementation boundary is intended to be:
 
 ```text
 src/lumina_dimoo/    MagicBrush data, objectives, LoRA, configuration, runner
-model/               upstream/checkpoint `trust_remote_code` compatibility
+model/               legacy upstream import compatibility (not checkpoint auto-map)
 datasets/            retained general preprocessing helpers while tools need them
 scripts/             public launcher and thin convenience wrappers
 ```
@@ -44,24 +44,24 @@ VQ-grid, and corruption-seed description currently duplicate documentation.
 
 | Old path | Current user/importer | Canonical path | Safe to remove now? |
 | --- | --- | --- | --- |
-| `attention_supervision/attention_loss.py` | `model/modeling_llada.py` | `lumina_dimoo.objectives.attention` | No; first change the root-model import, then remove the shim. |
-| `attention_supervision/lora.py` | old trainer and hard-lock evaluator | `lumina_dimoo.training.lora` | No; update/move the evaluator and remove the old trainer first. |
-| `objectives/gce.py` | `src/lumina_dimoo/training/runner.py`, `model/gce_loss.py` | `lumina_dimoo.objectives.gce` | No; first repair both imports while retaining GCE lazy import. |
-| `training/lora.py` | no non-shim runtime importer found | `lumina_dimoo.training.lora` | Yes after final reference scan. |
-| `training/objective_dispatch.py` | no non-shim runtime importer found | `lumina_dimoo.training.objective` | Yes after final reference scan. |
-| `datasets/magicbrush_tokens.py` | old trainer and several MagicBrush audit/calibration tools | `lumina_dimoo.data.magicbrush` | No; update/move the tools and delete the old trainer first. |
-| `datasets/magicbrush_dataset.py` | data preparation, tokenization, hard-lock evaluation, geometry audit, plus `read_jsonl` used by canonical data | `lumina_dimoo.data` for the minimal trainer helper | No; it is an active general preprocessing utility. |
-| `train/train_magicbrush_attention.py` | `train/run_a0_a1_long1500.sh` only | `scripts/train/launch.py` plus unified runner | Yes after the new launcher is tested. |
-| `train/run_a0_a1_long1500.sh` | old A0/A1 launch path only | `scripts/train/launch.py` | Yes after the new launcher is tested. |
+| `attention_supervision/attention_loss.py` | `model/modeling_llada.py` | `models.objectives.attention` | No; first change the root-model import, then remove the shim. |
+| `attention_supervision/lora.py` | old trainer and hard-lock evaluator | `training.lora` | No; update/move the evaluator and remove the old trainer first. |
+| `objectives/gce.py` | `src/lumina_dimoo/training/runner.py`, `model/gce_loss.py` | `models.objectives.gce` | No; first repair both imports while retaining GCE lazy import. |
+| `training/lora.py` | no non-shim runtime importer found | `training.lora` | Yes after final reference scan. |
+| `training/objective_dispatch.py` | no non-shim runtime importer found | `training.objective` | Yes after final reference scan. |
+| `datasets/magicbrush_tokens.py` | old trainer and several MagicBrush audit/calibration tools | `dataset.magicbrush` | No; update/move the tools and delete the old trainer first. |
+| `datasets/magicbrush_dataset.py` | data preparation, tokenization, hard-lock evaluation, geometry audit, plus `read_jsonl` used by canonical data | `dataset.utils` for the minimal trainer helper | No; it is an active general preprocessing utility. |
+| `train/train_magicbrush_attention.py` | `train/run_a0_a1_long1500.sh` only | `scripts/train/train.py` plus unified runner | Yes after the new launcher is tested. |
+| `train/run_a0_a1_long1500.sh` | old A0/A1 launch path only | `scripts/train/train.py` | Yes after the new launcher is tested. |
 
 The two concrete canonical-import fixes required before deleting shims are:
 
 ```text
-src/lumina_dimoo/training/runner.py
-    objectives.gce -> lumina_dimoo.objectives.gce  (still lazy for GCE only)
+src/training/distributed.py
+    objectives.gce -> models.objectives.gce  (still lazy for GCE only)
 
-model/modeling_llada.py
-    attention_supervision.attention_loss -> lumina_dimoo.objectives.attention
+src/models/lumina/modeling_llada.py
+    attention_supervision.attention_loss -> models.objectives.attention
 ```
 
 `model/gce_loss.py` also imports the GCE compatibility shim and must be made
@@ -69,14 +69,13 @@ canonical before `objectives/` can disappear.
 
 ## Model and dataset boundaries
 
-The root `model/` package remains necessary.  The pretrained model declares
-checkpoint auto-map modules under the root model implementation, and
-`src/lumina_dimoo/models/__init__.py` deliberately re-exports the small public
-surface (`LLaDAForMultiModalGeneration`, `MagicBrushModelOutput`).  The three
-one-line `src/lumina_dimoo/models/*.py` star-import facades are redundant and
-can be removed after their absence is checked.
+The root `model/` package is retained only when upstream scripts still import
+it.  It is not a checkpoint `auto_map` boundary: the supplied checkpoint lacks
+the Python files named by its dynamic mapping.  The canonical model surface is
+instead `src/models/lumina/`; a retained root package must be a thin re-export
+shim and nothing else.
 
-`src/lumina_dimoo/data/magicbrush.py` is canonical for the training dataset but
+`src/dataset/magicbrush.py` is canonical for the training dataset but
 currently imports only `read_jsonl` from `datasets.magicbrush_dataset`.  That
 small helper can be migrated locally without altering MagicBrush data behavior.
 The root `datasets/` package must remain while preprocessing and evaluation
@@ -108,9 +107,8 @@ deletion targets:
 ## Packaging and ignore audit
 
 `pyproject.toml` currently installs both `src` and root packages, including the
-deprecated shim packages.  This is appropriate for root `model`, `utils`, and
-`xllmx` checkpoint/upstream compatibility, but not for shims once their users
-are gone.  The `.gitignore` currently contains only `__pycache__/` and
+deprecated shim packages.  A root `model` package is justified only for real
+upstream import compatibility, not checkpoint dynamic loading.  The `.gitignore` currently contains only `__pycache__/` and
 `output/`; it needs targeted virtual-environment, build, test-cache, and
 experiment-output rules without ignoring source-bearing `datasets/`, `data/`,
 `models/`, or `configs/` directories.

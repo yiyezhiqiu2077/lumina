@@ -9,7 +9,7 @@ import torch
 from torch.utils.data import Dataset
 
 from config import SPECIAL_TOKENS
-from datasets.magicbrush_dataset import read_jsonl
+from dataset.utils import read_jsonl
 from utils.prompt_utils import create_prompt_templates
 
 

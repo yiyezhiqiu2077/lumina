@@ -1,8 +1,8 @@
 import pytest
 import torch
 
-from lumina_dimoo.models import MagicBrushModelOutput
-from lumina_dimoo.training.objective import compose_total_loss, run_model_for_objective, validate_objective
+from models.lumina.modeling_xllmx_dimoo import MagicBrushModelOutput
+from training.objective import compose_total_loss, run_model_for_objective, validate_objective
 
 
 class FakeModel:
@@ -28,7 +28,7 @@ def test_ce_is_exactly_generation_loss_and_requests_no_auxiliary():
 
 
 def test_attention_does_not_call_gce_and_uses_expected_sum(monkeypatch):
-    from lumina_dimoo.objectives.gce import GCEObjective
+    from models.objectives.gce import GCEObjective
 
     monkeypatch.setattr(GCEObjective, "forward", lambda *_: (_ for _ in ()).throw(AssertionError("GCE called")))
     model = FakeModel()

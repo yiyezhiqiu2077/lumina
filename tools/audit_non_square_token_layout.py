@@ -8,7 +8,7 @@ from pathlib import Path
 import torch
 
 from config import SPECIAL_TOKENS
-from datasets.magicbrush_tokens import _spatial_with_newlines
+from dataset.magicbrush import _spatial_with_newlines
 
 
 def parse_args():

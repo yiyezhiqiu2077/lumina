@@ -12,8 +12,8 @@ import torch
 import torch.distributed as dist
 from transformers import AutoTokenizer
 
-from datasets.magicbrush_tokens import MagicBrushTokenDataset
-from model import LLaDAForMultiModalGeneration
+from dataset.magicbrush import MagicBrushTokenDataset
+from models.lumina.modeling_xllmx_dimoo import LLaDAForMultiModalGeneration
 
 
 def parse_args():

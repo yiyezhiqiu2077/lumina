@@ -1,6 +1,6 @@
 import torch
 
-from model.modeling_llada import LLaDABlock
+from models.lumina.modeling_llada import LLaDABlock
 
 
 def _block_without_flash():

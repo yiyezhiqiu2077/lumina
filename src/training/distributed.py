@@ -2,11 +2,12 @@
 """Unified, mutually-exclusive CE / attention / GCE MagicBrush trainer."""
 from __future__ import annotations
 
-import argparse
 import contextlib
 import json
 import os
 import random
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -17,48 +18,12 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 
-from lumina_dimoo.data import MagicBrushTokenDataset
-from lumina_dimoo.models import LLaDAForMultiModalGeneration
-from lumina_dimoo.training.lora import inject_lora, load_lora_state_dict, lora_state_dict
-from lumina_dimoo.training.objective import OBJECTIVE_MODES, compose_total_loss, run_model_for_objective
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", type=Path, required=True)
-    parser.add_argument("--train-manifest", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--objective", choices=OBJECTIVE_MODES, required=True)
-    parser.add_argument("--max-steps", type=int, default=200)
-    parser.add_argument("--save-steps", type=int, default=100)
-    parser.add_argument("--checkpoint-steps", type=int, nargs="*", default=[])
-    parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--gradient-accumulation", type=int, default=4)
-    parser.add_argument("--learning-rate", type=float, default=2e-5)
-    parser.add_argument("--warmup-steps", type=int, default=20)
-    parser.add_argument("--weight-decay", type=float, default=0.1)
-    parser.add_argument("--max-grad-norm", type=float, default=4.0)
-    parser.add_argument("--lora-rank", type=int, default=16)
-    parser.add_argument("--lora-alpha", type=float, default=16.0)
-    parser.add_argument("--lora-dropout", type=float, default=0.05)
-    parser.add_argument("--condition-dropout", type=float, default=0.1)
-    parser.add_argument("--max-seq-len", type=int, default=5120)
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--num-workers", type=int, default=4)
-    parser.add_argument("--resume-from-checkpoint", type=Path)
-    parser.add_argument("--attention-layers", type=int, nargs="+", default=[24, 25, 26, 27])
-    parser.add_argument("--attention-loss-weight", type=float, default=0.1)
-    parser.add_argument("--gce-clusters", type=Path)
-    parser.add_argument("--gce-weight", type=float, default=1.0)
-    parser.add_argument("--gce-levels", type=int, nargs="+", default=[1024, 512])
-    args = parser.parse_args()
-    if args.objective == "gce" and args.gce_clusters is None:
-        parser.error("--gce-clusters is required only for --objective gce")
-    if args.objective != "gce" and args.gce_clusters is not None:
-        parser.error("--gce-clusters is only valid for --objective gce")
-    if args.objective != "attention" and args.attention_loss_weight != 0.1:
-        parser.error("--attention-loss-weight is only valid for --objective attention")
-    return args
+from dataset import MagicBrushTokenDataset
+from models.lumina.modeling_xllmx_dimoo import LLaDAForMultiModalGeneration
+from training.checkpoint import restore_checkpoint, save_checkpoint
+from training.config import launch_summary
+from training.lora import inject_lora
+from training.objective import OBJECTIVE_MODES, compose_total_loss, run_model_for_objective
 
 
 def seed_all(seed: int) -> None:
@@ -100,60 +65,31 @@ def objective_banner(args) -> dict:
     return banner
 
 
-def save_checkpoint(output: Path, step: int, model, optimizer, scheduler, rank: int, objective: str) -> None:
-    destination = output / f"checkpoint-{step:06d}"
-    destination.mkdir(parents=True, exist_ok=True)
-    if rank == 0:
-        torch.save(lora_state_dict(model.module), destination / "lora.pt")
-        (destination / "lora_config.json").write_text(
-            json.dumps({"step": step, "objective": objective, "targets": ["q_proj", "k_proj", "v_proj", "attn_out"]}, indent=2)
-            + "\n"
-        )
-    torch.save(
-        {
-            "optimizer": optimizer.state_dict(),
-            "scheduler": scheduler.state_dict(),
-            "torch_rng": torch.get_rng_state(),
-            "cuda_rng": torch.cuda.get_rng_state(),
-            "numpy_rng": np.random.get_state(),
-            "python_rng": random.getstate(),
-            "step": step,
-            "objective": objective,
-        },
-        destination / f"training_state.rank{rank:02d}.pt",
-    )
-    dist.barrier()
+def distributed_worker_environment_present() -> bool:
+    return all(os.environ.get(name) for name in ("RANK", "WORLD_SIZE", "LOCAL_RANK"))
 
 
-def restore_checkpoint(checkpoint: Path, model, optimizer, scheduler, rank: int, max_steps: int, objective: str):
-    load_lora_state_dict(model, torch.load(checkpoint / "lora.pt", map_location="cpu", weights_only=True))
-    state = torch.load(checkpoint / f"training_state.rank{rank:02d}.pt", map_location="cpu")
-    if state.get("objective") not in (None, objective):
-        raise ValueError(f"checkpoint objective {state['objective']!r} does not match {objective!r}")
-    optimizer.load_state_dict(state["optimizer"])
-    scheduler.load_state_dict(state["scheduler"])
-    step = int(state["step"])
-    if step >= max_steps:
-        raise ValueError(f"resume step {step} must be below max_steps {max_steps}")
-    resumed_lrs = []
-    for index, group in enumerate(optimizer.param_groups):
-        resumed_lr = scheduler.base_lrs[index] * scheduler.lr_lambdas[index](scheduler.last_epoch)
-        group["lr"] = resumed_lr
-        resumed_lrs.append(resumed_lr)
-    scheduler._last_lr = resumed_lrs
-    torch.set_rng_state(state["torch_rng"])
-    torch.cuda.set_rng_state(state["cuda_rng"])
-    np.random.set_state(state["numpy_rng"])
-    random.setstate(state["python_rng"])
-    return step, {
-        "checkpoint": str(checkpoint),
-        "restored_step": step,
-        "restored_optimizer": True,
-        "restored_scheduler_progress": True,
-        "scheduler_horizon": max_steps,
-        "resumed_lr": resumed_lrs,
-        "data_cursor_strategy": "derived_from_global_step_and_gradient_accumulation",
-    }
+def build_torchrun_command(args, worker_script: Path, config_path: Path, resume_from_checkpoint: Path | None) -> list[str]:
+    command = [
+        sys.executable,
+        "-m",
+        "torch.distributed.run",
+        "--standalone",
+        "--nproc_per_node",
+        str(args.nproc_per_node),
+        str(worker_script),
+        "--config",
+        str(config_path),
+        "--distributed-worker",
+    ]
+    if resume_from_checkpoint is not None:
+        command.extend(["--resume-from-checkpoint", str(resume_from_checkpoint)])
+    return command
+
+
+def launch_training(args, worker_script: Path, config_path: Path, resume_from_checkpoint: Path | None) -> None:
+    print(json.dumps(launch_summary(args), sort_keys=True), flush=True)
+    subprocess.run(build_torchrun_command(args, worker_script, config_path, resume_from_checkpoint), check=True)
 
 
 def _global_attention_loss(auxiliary_by_layer: torch.Tensor, world_size: int):
@@ -206,7 +142,7 @@ def run(args):
     # Deliberately lazy: CE/attention never import, instantiate, or load GCE.
     gce_objective = None
     if args.objective == "gce":
-        from objectives.gce import GCEObjective
+        from models.objectives.gce import GCEObjective
 
         gce_objective = GCEObjective.from_clusters(str(args.gce_clusters), tuple(args.gce_levels)).to(device)
 
@@ -400,11 +336,3 @@ def run(args):
                 break
         epoch += 1
     dist.destroy_process_group()
-
-
-def main():
-    run(parse_args())
-
-
-if __name__ == "__main__":
-    main()
