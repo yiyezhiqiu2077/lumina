@@ -43,6 +43,8 @@ def validate_train_config(args: argparse.Namespace) -> None:
         raise ValueError(f"MagicBrush vq_grid must be [32, 32], got {args.vq_grid}")
     if args.launcher != "torchrun" or args.rdzv != "standalone":
         raise ValueError(f"unsupported single-node launcher policy: launcher={args.launcher!r}, rdzv={args.rdzv!r}")
+    if args.precision != "bf16":
+        raise ValueError(f"only the validated bf16 runtime is supported, got {args.precision!r}")
 
 
 def load_train_config(config_path: Path, resume_from_checkpoint: Path | None = None) -> argparse.Namespace:

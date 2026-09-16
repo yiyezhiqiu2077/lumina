@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import argparse
-import subprocess
-import sys
+import json
 from pathlib import Path
 
 
-SCRIPT_DIR = Path(__file__).resolve().parent
+from dataset.audit import run_geometry_audit, run_non_square_layout_audit, run_sequence_audit
 
 
 def parse_args() -> argparse.Namespace:
@@ -26,25 +25,27 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run(script: str, *args: object) -> None:
-    subprocess.run([sys.executable, str(SCRIPT_DIR / script), *map(str, args)], check=True)
+def write(output: Path, result: dict) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(json.dumps(result, indent=2, ensure_ascii=False))
 
 
 def main() -> None:
     args = parse_args()
     if args.command == "layout":
-        run("audit_non_square_token_layout.py", "--output", args.output)
+        write(args.output, run_non_square_layout_audit())
         return
     if args.command in ("geometry", "all"):
         output = args.output if args.command == "geometry" else args.output / "geometry.json"
-        run("audit_magicbrush_geometry.py", "--manifest", args.manifest, "--output", output, "--vq-stride", args.vq_stride)
+        write(output, run_geometry_audit(args.manifest, vq_stride=args.vq_stride))
     if args.command in ("sequence", "all"):
         if args.model is None:
             raise SystemExit("--model is required for sequence and all audits")
         output = args.output if args.command == "sequence" else args.output / "sequence.json"
-        run("audit_magicbrush_sequences.py", "--model", args.model, "--manifest", args.manifest, "--output", output, "--seed", args.seed)
+        write(output, run_sequence_audit(args.model, args.manifest, seed=args.seed))
     if args.command == "all":
-        run("audit_non_square_token_layout.py", "--output", args.output / "non_square_layout.json")
+        write(args.output / "non_square_layout.json", run_non_square_layout_audit())
 
 
 if __name__ == "__main__":

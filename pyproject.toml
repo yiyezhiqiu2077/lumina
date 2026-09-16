@@ -1,7 +1,7 @@
 [project]
 name = "lumina-dimoo-magicbrush"
 version = "0.1.0"
-description = "Unified MagicBrush CE, attention-supervision, and GCE experiments"
+description = "Lumina-DiMOO training, inference, and MagicBrush experiments"
 requires-python = ">=3.10,<3.11"
 dependencies = [
   "accelerate==1.14.0",
@@ -20,17 +20,15 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest==9.1.1"]
+upstream = ["fairscale", "h5py", "pandas", "tensorboard"]
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-py-modules = ["config"]
-
 [tool.setuptools.packages.find]
-where = ["src", "."]
-include = ["dataset*", "models*", "training*", "utils*", "model*", "datasets*", "generators*", "xllmx*"]
+where = ["src"]
+include = ["dataset*", "models*", "training*", "utils*", "generators*", "xllmx*"]
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu121" }

@@ -13,15 +13,14 @@ from diffusers import VQModel
 from diffusers.image_processor import VaeImageProcessor
 from PIL import Image, ImageDraw
 
-from datasets.magicbrush_dataset import (
+from dataset.geometry import (
     SharedGeometry,
     apply_shared_geometry,
     enrich_geometry,
-    read_jsonl,
     resolve_record_paths,
     split_by_session,
-    write_jsonl,
 )
+from dataset.utils import read_jsonl, write_jsonl
 
 
 def encode(vqvae, processor, image: Image.Image) -> tuple[torch.Tensor, tuple[int, int]]:

@@ -4,7 +4,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from config import SPECIAL_TOKENS, VISUAL_CODEBOOK_SIZE
+from utils.constants import SPECIAL_TOKENS, VISUAL_CODEBOOK_SIZE
 
 
 class GroupedCrossEntropyLoss(nn.Module):
