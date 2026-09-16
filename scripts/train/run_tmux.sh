@@ -7,9 +7,9 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 usage() {
     cat <<'EOF'
 Usage:
-  bash scripts/train/run_tmux.sh attention
-  bash scripts/train/run_tmux.sh gce
-  bash scripts/train/run_tmux.sh ce
+  bash scripts/train/run_tmux.sh attention [--resume-from-checkpoint PATH]
+  bash scripts/train/run_tmux.sh gce [--resume-from-checkpoint PATH]
+  bash scripts/train/run_tmux.sh ce [--resume-from-checkpoint PATH]
   bash scripts/train/run_tmux.sh status
   bash scripts/train/run_tmux.sh logs <attention|gce|ce>
 
@@ -45,6 +45,32 @@ config_for() {
     esac
 }
 
+output_name_for() {
+    case "$1" in
+        attention) printf '%s\n' 'MB-ATTN-2G-B8-A2-S42' ;;
+        gce) printf '%s\n' 'MB-GCE-2G-B8-A2-S42' ;;
+        ce) printf '%s\n' 'MB-CE-2G-B8-A2-S42' ;;
+        *) die "unknown objective: $1 (expected attention, gce, or ce)" ;;
+    esac
+}
+
+validate_selected_gpus() {
+    local devices="$CUDA_VISIBLE_DEVICES"
+    local -a device_ids
+    local device_id
+    IFS=',' read -r -a device_ids <<< "$devices"
+    [[ "${#device_ids[@]}" -eq 2 ]] || die "CUDA_VISIBLE_DEVICES must contain exactly 2 device IDs, got: $devices"
+    for device_id in "${device_ids[@]}"; do
+        [[ "$device_id" =~ ^[0-9]+$ ]] || die "CUDA_VISIBLE_DEVICES contains an invalid device ID: $devices"
+    done
+    [[ "${device_ids[0]}" != "${device_ids[1]}" ]] || die "CUDA_VISIBLE_DEVICES must contain two distinct device IDs: $devices"
+    printf 'selected GPUs: %s\n' "$devices"
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        nvidia-smi --query-gpu=index,memory.used,memory.total,utilization.gpu --format=csv,noheader -i "$devices" \
+            || printf 'warning: unable to query selected GPU utilization; no processes were changed\n' >&2
+    fi
+}
+
 require_environment() {
     local variable
     for variable in PROJECT_ROOT ASSET_ROOT DATA_ROOT MODEL_PATH OUTPUT_ROOT MAGICBRUSH_DATA_CONFIG DATA_CONFIG CUDA_VISIBLE_DEVICES; do
@@ -63,6 +89,32 @@ require_environment() {
     local manifest_count
     manifest_count="$(wc -l < "$DATA_CONFIG")"
     [[ "$manifest_count" == '8807' ]] || die "MagicBrush manifest must contain 8807 rows, got $manifest_count: $DATA_CONFIG"
+    validate_selected_gpus
+}
+
+reject_existing_fresh_output() {
+    local objective="$1"
+    local output_dir="$OUTPUT_ROOT/$(output_name_for "$objective")"
+    local checkpoint
+    for checkpoint in train_metrics.jsonl experiment_config.json lora_report.json; do
+        [[ ! -e "$output_dir/$checkpoint" ]] || die "existing experiment output detected: $output_dir (use a different OUTPUT_ROOT or use resume)"
+    done
+    for checkpoint in "$output_dir"/checkpoint-*; do
+        [[ ! -e "$checkpoint" ]] || die "existing experiment output detected: $output_dir (use a different OUTPUT_ROOT or use resume)"
+    done
+}
+
+validate_resume_checkpoint() {
+    local objective="$1"
+    local checkpoint="$2"
+    local output_dir="$OUTPUT_ROOT/$(output_name_for "$objective")"
+    [[ -d "$checkpoint" ]] || die "resume checkpoint is not a directory: $checkpoint"
+    [[ -d "$output_dir" ]] || die "resume output directory does not exist: $output_dir"
+    local checkpoint_real output_real
+    checkpoint_real="$(realpath -e "$checkpoint")"
+    output_real="$(realpath -e "$output_dir")"
+    [[ "$(dirname "$checkpoint_real")" == "$output_real" && "$(basename "$checkpoint_real")" == checkpoint-* ]] \
+        || die "resume checkpoint must be inside the correct $objective experiment directory: $output_dir"
 }
 
 session_exists() {
@@ -87,9 +139,11 @@ reject_active_sessions() {
 write_launcher() {
     local objective="$1"
     local config_relative="$2"
+    local resume_checkpoint="$3"
     local launcher="$OUTPUT_ROOT/logs/${objective}.command.sh"
     local log_file="$OUTPUT_ROOT/logs/${objective}.log"
     local exit_file="$OUTPUT_ROOT/logs/${objective}.exit_code"
+    local running_file="$OUTPUT_ROOT/logs/${objective}.running"
     local config_path="$PROJECT_ROOT/$config_relative"
     local variable
 
@@ -102,6 +156,11 @@ write_launcher() {
         done
         printf 'cd %q\n' "$PROJECT_ROOT"
         printf 'mkdir -p %q\n' "$OUTPUT_ROOT/logs"
+        printf 'rm -f %q\n' "$exit_file"
+        printf 'touch %q\n' "$running_file"
+        printf 'finish() { local status=$?; trap - EXIT; rm -f %q; printf %q "$status" > %q; exit "$status"; }\n' \
+            "$running_file" '%s\n' "$exit_file"
+        printf 'trap finish EXIT\n'
         printf '{\n'
         printf '  printf %q "$(date -Is)"\n' 'started_at=%s\n'
         printf '  printf %q "$(hostname)"\n' 'hostname=%s\n'
@@ -112,10 +171,13 @@ write_launcher() {
         printf '  printf %q "$DATA_CONFIG"\n' 'data_config=%s\n'
         printf '  printf %q "$OUTPUT_ROOT"\n' 'output_root=%s\n'
         printf '  printf %q %q\n' 'config=%s\n' "$config_path"
-        printf '  uv run python scripts/train/train.py --config %q\n' "$config_path"
+        if [[ -n "$resume_checkpoint" ]]; then
+            printf '  uv run python scripts/train/train.py --config %q --resume-from-checkpoint %q\n' "$config_path" "$resume_checkpoint"
+        else
+            printf '  uv run python scripts/train/train.py --config %q\n' "$config_path"
+        fi
         printf '} 2>&1 | tee %q\n' "$log_file"
         printf 'TRAIN_STATUS=${PIPESTATUS[0]}\n'
-        printf 'printf %q "$TRAIN_STATUS" > %q\n' '%s\n' "$exit_file"
         printf 'exit "$TRAIN_STATUS"\n'
     } > "$launcher"
     chmod 700 "$launcher"
@@ -124,7 +186,8 @@ write_launcher() {
 
 start_objective() {
     local objective="$1"
-    local session config_relative launcher
+    local resume_checkpoint="$2"
+    local session config_relative launcher exit_file
     session="$(session_for "$objective")"
     config_relative="$(config_for "$objective")"
 
@@ -136,8 +199,15 @@ start_objective() {
         [[ -f "$GCE_CLUSTER_PATH" ]] || die "GCE_CLUSTER_PATH is not a file: $GCE_CLUSTER_PATH"
     fi
     reject_active_sessions "$session"
+    if [[ -n "$resume_checkpoint" ]]; then
+        validate_resume_checkpoint "$objective" "$resume_checkpoint"
+    else
+        reject_existing_fresh_output "$objective"
+    fi
+    exit_file="$OUTPUT_ROOT/logs/${objective}.exit_code"
+    rm -f "$exit_file"
 
-    launcher="$(write_launcher "$objective" "$config_relative")"
+    launcher="$(write_launcher "$objective" "$config_relative" "$resume_checkpoint")"
     tmux new-session -d -s "$session" bash "$launcher"
     printf 'started objective=%s session=%s\n' "$objective" "$session"
     printf 'log=%s\n' "$OUTPUT_ROOT/logs/${objective}.log"
@@ -146,21 +216,23 @@ start_objective() {
 
 show_status() {
     require_command tmux
-    local objective session exit_file status='NOT RUNNING'
+    local objective session exit_file running_file status='NOT STARTED'
     for objective in attention gce ce; do
         session="$(session_for "$objective")"
-        if session_exists "$session"; then
+        running_file="${OUTPUT_ROOT:-}/logs/${objective}.running"
+        if session_exists "$session" || [[ -f "$running_file" ]]; then
             status='RUNNING'
+        elif [[ -n "${OUTPUT_ROOT:-}" && -f "$OUTPUT_ROOT/logs/${objective}.exit_code" ]]; then
+            exit_file="$OUTPUT_ROOT/logs/${objective}.exit_code"
+            if [[ "$(< "$exit_file")" == '0' ]]; then
+                status='FINISHED exit_code=0'
+            else
+                status="FAILED exit_code=$(< "$exit_file")"
+            fi
         else
-            status='NOT RUNNING'
+            status='NOT STARTED'
         fi
         printf '%-10s %-12s %s' "$objective" "$session" "$status"
-        if [[ -n "${OUTPUT_ROOT:-}" ]]; then
-            exit_file="$OUTPUT_ROOT/logs/${objective}.exit_code"
-            if [[ -f "$exit_file" ]]; then
-                printf ' exit_code=%s' "$(< "$exit_file")"
-            fi
-        fi
         printf '\n'
     done
 }
@@ -178,8 +250,13 @@ main() {
     local command="${1:-help}"
     case "$command" in
         attention|gce|ce)
-            [[ "$#" == 1 ]] || die "usage: run_tmux.sh <attention|gce|ce>"
-            start_objective "$command"
+            if [[ "$#" == 1 ]]; then
+                start_objective "$command" ''
+            elif [[ "$#" == 3 && "$2" == '--resume-from-checkpoint' ]]; then
+                start_objective "$command" "$3"
+            else
+                die "usage: run_tmux.sh <attention|gce|ce> [--resume-from-checkpoint PATH]"
+            fi
             ;;
         status)
             [[ "$#" == 1 ]] || die 'usage: run_tmux.sh status'

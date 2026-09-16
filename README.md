@@ -76,6 +76,17 @@ uv run python scripts/train/train.py --config configs/train/magicbrush_gce.yaml 
 - [configs/train/magicbrush_attention.yaml](configs/train/magicbrush_attention.yaml)
 - [configs/train/magicbrush_gce.yaml](configs/train/magicbrush_gce.yaml)
 
+## Matched Objective Ablation
+
+严格 matched 的 CE / Attention / GCE 对照实验位于
+[`configs/train/ablation/`](configs/train/ablation/)，统一使用 2 GPU、每卡 batch 8、gradient
+accumulation 2、global batch 32 和相同的训练 schedule。完整的环境、资产准备、前台 smoke、
+一条命令 tmux 正式启动、resume、曲线与结果打包流程见
+[`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md)。
+
+`configs/train/magicbrush_*.yaml` 是既有实验配置；它们保留用于历史实验，不构成这三种
+objective 的严格 matched comparison。
+
 ## 数据与工具
 
 数据准备和 tokenization 共用 `src/dataset/` 的实现：

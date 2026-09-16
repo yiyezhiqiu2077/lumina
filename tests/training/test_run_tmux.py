@@ -98,6 +98,7 @@ def test_objective_creates_snapshot_launcher(
     result = _run(objective, environment=environment)
     assert result.returncode == 0, result.stderr
     assert f"session={session}" in result.stdout
+    assert "selected GPUs: 0,1" in result.stdout
     launcher = Path(environment["OUTPUT_ROOT"]) / "logs" / f"{objective}.command.sh"
     content = launcher.read_text(encoding="utf-8")
     assert subprocess.run(["bash", "-n", str(launcher)], check=False).returncode == 0
@@ -121,6 +122,7 @@ def test_launcher_preserves_python_exit_status(tmp_path: Path):
     assert launched.returncode == 23
     exit_code = Path(environment["OUTPUT_ROOT"]) / "logs" / "attention.exit_code"
     assert exit_code.read_text(encoding="utf-8") == "23\n"
+    assert not (Path(environment["OUTPUT_ROOT"]) / "logs" / "attention.running").exists()
     assert "fake uv invoked" in (Path(environment["OUTPUT_ROOT"]) / "logs" / "attention.log").read_text(encoding="utf-8")
 
 
@@ -155,6 +157,61 @@ def test_gce_requires_cluster_asset(tmp_path: Path):
     assert "GCE_CLUSTER_PATH" in result.stderr
 
 
+@pytest.mark.parametrize("artifact", ("train_metrics.jsonl", "experiment_config.json", "lora_report.json"))
+def test_fresh_run_rejects_existing_experiment_artifacts(tmp_path: Path, artifact: str):
+    environment = _environment(tmp_path)
+    output = Path(environment["OUTPUT_ROOT"]) / "MB-ATTN-2G-B8-A2-S42"
+    output.mkdir(parents=True)
+    (output / artifact).write_text("old run\n", encoding="utf-8")
+    result = _run("attention", environment=environment)
+    assert result.returncode != 0
+    assert "existing experiment output detected" in result.stderr
+    assert "use resume" in result.stderr
+
+
+def test_fresh_run_rejects_existing_checkpoint(tmp_path: Path):
+    environment = _environment(tmp_path)
+    checkpoint = Path(environment["OUTPUT_ROOT"]) / "MB-ATTN-2G-B8-A2-S42" / "checkpoint-001375"
+    checkpoint.mkdir(parents=True)
+    result = _run("attention", environment=environment)
+    assert result.returncode != 0
+    assert "existing experiment output detected" in result.stderr
+
+
+def test_valid_resume_is_accepted_and_stale_exit_code_is_removed(tmp_path: Path):
+    environment = _environment(tmp_path)
+    output = Path(environment["OUTPUT_ROOT"]) / "MB-ATTN-2G-B8-A2-S42"
+    checkpoint = output / "checkpoint-001375"
+    checkpoint.mkdir(parents=True)
+    logs = Path(environment["OUTPUT_ROOT"]) / "logs"
+    logs.mkdir(parents=True)
+    stale_exit = logs / "attention.exit_code"
+    stale_exit.write_text("0\n", encoding="utf-8")
+    result = _run("attention", "--resume-from-checkpoint", str(checkpoint), environment=environment)
+    assert result.returncode == 0, result.stderr
+    assert not stale_exit.exists()
+    launcher = logs / "attention.command.sh"
+    assert f"--resume-from-checkpoint {checkpoint}" in launcher.read_text(encoding="utf-8")
+
+
+def test_resume_must_belong_to_requested_objective_output(tmp_path: Path):
+    environment = _environment(tmp_path)
+    (Path(environment["OUTPUT_ROOT"]) / "MB-ATTN-2G-B8-A2-S42").mkdir(parents=True)
+    checkpoint = Path(environment["OUTPUT_ROOT"]) / "MB-GCE-2G-B8-A2-S42" / "checkpoint-001375"
+    checkpoint.mkdir(parents=True)
+    result = _run("attention", "--resume-from-checkpoint", str(checkpoint), environment=environment)
+    assert result.returncode != 0
+    assert "correct attention experiment directory" in result.stderr
+
+
+def test_one_gpu_is_rejected(tmp_path: Path):
+    environment = _environment(tmp_path)
+    environment["CUDA_VISIBLE_DEVICES"] = "0"
+    result = _run("attention", environment=environment)
+    assert result.returncode != 0
+    assert "exactly 2 device IDs" in result.stderr
+
+
 def test_duplicate_and_other_active_sessions_are_rejected(tmp_path: Path):
     environment = _environment(tmp_path)
     environment["FAKE_TMUX_ACTIVE"] = "lumina_attn"
@@ -174,5 +231,17 @@ def test_help_and_status_do_not_start_training(tmp_path: Path):
     assert help_result.returncode == 0
     assert "Usage:" in help_result.stdout
     assert status_result.returncode == 0
-    assert "NOT RUNNING" in status_result.stdout
+    assert "NOT STARTED" in status_result.stdout
     assert not Path(environment["FAKE_TMUX_RECORD"]).exists()
+
+
+def test_status_reports_finished_and_failed_exit_codes(tmp_path: Path):
+    environment = _environment(tmp_path)
+    logs = Path(environment["OUTPUT_ROOT"]) / "logs"
+    logs.mkdir(parents=True)
+    (logs / "attention.exit_code").write_text("0\n", encoding="utf-8")
+    (logs / "gce.exit_code").write_text("7\n", encoding="utf-8")
+    result = _run("status", environment=environment)
+    assert result.returncode == 0
+    assert "FINISHED exit_code=0" in result.stdout
+    assert "FAILED exit_code=7" in result.stdout
