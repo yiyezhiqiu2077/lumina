@@ -21,8 +21,16 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest==9.1.1"]
 
-[tool.uv]
-package = false
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["config"]
+
+[tool.setuptools.packages.find]
+where = ["src", "."]
+include = ["lumina_dimoo*", "model*", "datasets*", "attention_supervision*", "objectives*", "training*", "utils*", "xllmx*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

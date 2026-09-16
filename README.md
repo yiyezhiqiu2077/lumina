@@ -34,37 +34,44 @@ checkpoint 均不在 Git 中。
 
 ```bash
 # B0：与 GCE 设置匹配的 CE baseline（4 GPU × batch 4 × accum 2）
-uv run bash scripts/train_magicbrush_ce.sh
+uv run python scripts/train/train.py --config configs/train/magicbrush_ce.yaml
 
 # A1：attention supervision（2 GPU × batch 8 × accum 4）
-uv run bash scripts/train_magicbrush_attention.sh
+uv run python scripts/train/train.py --config configs/train/magicbrush_attention.yaml
 
 # G1：GCE（4 GPU × batch 4 × accum 2）
 export GCE_CLUSTER_PATH=/path/to/gce_clusters_1024_512.pt
-uv run bash scripts/train_magicbrush_gce.sh
+uv run python scripts/train/train.py --config configs/train/magicbrush_gce.yaml
 ```
 
-三个 launcher 都调用 [train/train_magicbrush.py](train/train_magicbrush.py)，差异只在
-`--objective {ce,attention,gce}` 与各自真实超参数。CE/GCE 使用 global batch 32；attention
+三个配置都调用 [runner.py](src/lumina_dimoo/training/runner.py)，差异只在
+`objective.mode` 与各自真实超参数。CE/GCE 使用 global batch 32；attention
 使用 global batch 64，因此 CE 不应被表述为与 attention 的严格 matched baseline。
 
 `DATA_CONFIG` 可覆盖默认 manifest，`OUTPUT_DIR` 可覆盖默认输出目录，
 `RESUME_FROM_CHECKPOINT` 可从新进程恢复。例如：
 
 ```bash
-RESUME_FROM_CHECKPOINT=/path/to/checkpoint-000500 \
-uv run bash scripts/train_magicbrush_gce.sh
+uv run python scripts/train/train.py --config configs/train/magicbrush_gce.yaml \
+  --resume-from-checkpoint /path/to/checkpoint-000500
 ```
 
 ## 配置与验证
 
-- [configs/experiments/magicbrush_ce.yaml](configs/experiments/magicbrush_ce.yaml)
-- [configs/experiments/magicbrush_attention.yaml](configs/experiments/magicbrush_attention.yaml)
-- [configs/experiments/magicbrush_gce.yaml](configs/experiments/magicbrush_gce.yaml)
+- [configs/train/magicbrush_ce.yaml](configs/train/magicbrush_ce.yaml)
+- [configs/train/magicbrush_attention.yaml](configs/train/magicbrush_attention.yaml)
+- [configs/train/magicbrush_gce.yaml](configs/train/magicbrush_gce.yaml)
+
+## Repository Structure
+
+- `src/`：可复用 implementation（data、objectives、training）。
+- `scripts/`：用户直接运行的薄入口和工具。
+- `configs/`：训练、数据和 runtime specification。
+- `tests/`：按 data/models/objectives/training 分层的 regression tests。
 
 ```bash
 uv run pytest -q
-bash -n scripts/*.sh
+bash -n scripts/train/*.sh
 ```
 
 多节点启动、FP8、FSDP 和 FlashAttention 性能优化不属于当前 main 的承诺范围。

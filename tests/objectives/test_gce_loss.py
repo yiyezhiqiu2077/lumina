@@ -1,6 +1,6 @@
 import torch
 
-from model.gce_loss import GroupedCrossEntropyLoss
+from lumina_dimoo.objectives.gce import GroupedCrossEntropyLoss
 
 
 def make_loss():

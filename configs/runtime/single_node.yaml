@@ -1,0 +1,4 @@
+launcher: torchrun
+rdzv: standalone
+precision: bf16
+note: "GPU count is defined per experiment config/launcher; no multi-node policy is implied."

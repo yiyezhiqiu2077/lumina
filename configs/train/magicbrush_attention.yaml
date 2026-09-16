@@ -1,7 +1,13 @@
 experiment_name: A1-ATTN
+output_name: A1-ATTN
 objective:
   mode: attention
 seed: 42
+paths:
+  model_env: MODEL_PATH
+  data_root_env: DATA_ROOT
+  train_manifest_env: DATA_CONFIG
+  output_root_env: OUTPUT_ROOT
 data:
   root_env: DATA_ROOT
   train_manifest_env: DATA_CONFIG

@@ -1,7 +1,13 @@
-experiment_name: B0-CE
+experiment_name: G1-GCE
+output_name: G1-GCE
 objective:
-  mode: ce
+  mode: gce
 seed: 42
+paths:
+  model_env: MODEL_PATH
+  data_root_env: DATA_ROOT
+  train_manifest_env: DATA_CONFIG
+  output_root_env: OUTPUT_ROOT
 data:
   root_env: DATA_ROOT
   train_manifest_env: DATA_CONFIG
@@ -21,5 +27,7 @@ optimization:
 distributed:
   nproc_per_node: 4
   global_batch_size: 32
-notes:
-  parameter_source: "GCE matched CE baseline; not matched to the attention setup."
+gce:
+  weight: 1.0
+  levels: [1024, 512]
+  cluster_path_env: GCE_CLUSTER_PATH

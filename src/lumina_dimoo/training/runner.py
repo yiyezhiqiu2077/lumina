@@ -17,10 +17,10 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 
-from datasets.magicbrush_tokens import MagicBrushTokenDataset
-from model import LLaDAForMultiModalGeneration
-from training.lora import inject_lora, load_lora_state_dict, lora_state_dict
-from training.objective_dispatch import OBJECTIVE_MODES, compose_total_loss, run_model_for_objective
+from lumina_dimoo.data import MagicBrushTokenDataset
+from lumina_dimoo.models import LLaDAForMultiModalGeneration
+from lumina_dimoo.training.lora import inject_lora, load_lora_state_dict, lora_state_dict
+from lumina_dimoo.training.objective import OBJECTIVE_MODES, compose_total_loss, run_model_for_objective
 
 
 def parse_args():
@@ -173,8 +173,7 @@ def _global_attention_loss(auxiliary_by_layer: torch.Tensor, world_size: int):
     return backward_loss, global_metrics, auxiliary
 
 
-def main():
-    args = parse_args()
+def run(args):
     dist.init_process_group("nccl")
     rank = dist.get_rank()
     world_size = dist.get_world_size()
@@ -401,6 +400,10 @@ def main():
                 break
         epoch += 1
     dist.destroy_process_group()
+
+
+def main():
+    run(parse_args())
 
 
 if __name__ == "__main__":
