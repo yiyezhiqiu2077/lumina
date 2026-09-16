@@ -1,110 +1,153 @@
-# Objective ablation 实验协议
+# Objective ablation 一条命令实验指南
 
-本文定义第一轮 Lumina-DiMOO / MagicBrush objective ablation 的可复现实验协议；它只描述
-配置、数据 contract、命令与记录规范，不预设任何 objective 的结果优劣。
-
-## 目标与环境
-
-第一阶段在同一 MagicBrush token manifest 上比较：E0=CE、E1=Attention、E2=GCE。三者
-共享数据顺序、seed、BF16、LoRA、AdamW、DDP 与 checkpoint 机制；唯一 objective 差异为
-辅助损失项。推荐环境：
+本轮 MagicBrush objective ablation 采用相同数据、seed、LoRA、optimizer、batch 与 schedule，比较 CE、Attention、GCE 三个 objective。正式运行顺序固定为 Attention → GCE → CE，三者均使用 GPU 0/1，不能并发。
 
 ```bash
-cd /path/to/lumina
-uv sync --extra dev --extra upstream
-# 画图时额外安装：uv sync --extra dev --extra upstream --extra analysis
+bash scripts/train/run_tmux.sh attention
+bash scripts/train/run_tmux.sh gce
+bash scripts/train/run_tmux.sh ce
+```
 
+这些命令创建 detached tmux session。不需要先进入 tmux、在 tmux 内重新 export 环境变量，或手工 Ctrl+B D。
+
+## 1. 环境与路径
+
+```bash
+export PROJECT_ROOT=/path/to/lumina
+cd "$PROJECT_ROOT"
+uv sync --extra dev --extra upstream --extra analysis
+
+export ASSET_ROOT=/path/to/lumina_assets
+export DATA_ROOT="$ASSET_ROOT/datasets/lumina_edit"
+export MODEL_PATH="$ASSET_ROOT/models/Lumina-DiMOO"
+export OUTPUT_ROOT=/path/to/experiments/lumina_objective_ablation_v1
+export MAGICBRUSH_DATA_CONFIG="$DATA_ROOT/magicbrush/tokens/train/manifest.jsonl"
+export DATA_CONFIG="$MAGICBRUSH_DATA_CONFIG"
+export GCE_CLUSTER_PATH="$DATA_ROOT/artifacts/gce_clusters_1024_512.pt"
 export CUDA_VISIBLE_DEVICES=0,1
-export MODEL_PATH=/path/to/Lumina-DiMOO
-export DATA_ROOT=/data02/<user>/datasets/lumina_edit
-export DATA_CONFIG=$DATA_ROOT/magicbrush/tokens/train/manifest.jsonl
-export OUTPUT_ROOT=/data02/<user>/experiments/lumina_objective_ablation_v1
-export GCE_CLUSTER_PATH=$DATA_ROOT/artifacts/gce_clusters_1024_512.pt
 ```
 
-第一轮可直接使用现有 token manifest，避免为目录命名复制大型数据：
+启动 helper 前，在普通 shell 中一次性设置这些变量。helper 会用安全 shell quoting 将调用时刻的 `PROJECT_ROOT`、`ASSET_ROOT`、`DATA_ROOT`、`MODEL_PATH`、`OUTPUT_ROOT`、`MAGICBRUSH_DATA_CONFIG`、`DATA_CONFIG`、`GCE_CLUSTER_PATH`、`CUDA_VISIBLE_DEVICES` snapshot 到 launcher，不依赖旧 tmux server 的环境。
+
+当前服务器已有资产可直接使用：
 
 ```bash
-export DATA_CONFIG=/data02/zhangyuyang/experiments/lumina_dimoo_magicbrush_a0_a1_v2_20260909/dataset/official_tokens/train/manifest.jsonl
-wc -l "$DATA_CONFIG"  # 必须为 8807
+export PROJECT_ROOT=/data02/zhangyuyang/github_push_stage.FshNx1/lumina
+export ASSET_ROOT=/data02/zhangyuyang
+export DATA_ROOT=/data02/zhangyuyang/experiments/lumina_dimoo_magicbrush_a0_a1_v2_20260909/dataset
+export MODEL_PATH=/data02/zhangyuyang/Lumina-DiMOO/models/Lumina-DiMOO
+export OUTPUT_ROOT=/data02/zhangyuyang/experiments/lumina_objective_ablation_v1
+export MAGICBRUSH_DATA_CONFIG="$DATA_ROOT/official_tokens/train/manifest.jsonl"
+export DATA_CONFIG="$MAGICBRUSH_DATA_CONFIG"
+export GCE_CLUSTER_PATH=/data02/zhangyuyang/experiments/lumina_dimoo_gce_assets_20260912/gce_clusters_1024_512.pt
+export CUDA_VISIBLE_DEVICES=0,1
+cd "$PROJECT_ROOT"
 ```
 
-推荐的长期数据布局为：
-
-```text
-/data02/<user>/datasets/lumina_edit/
-├── magicbrush/{raw,prepared,tokens/train/{manifest.jsonl,files/}}
-├── senior/{raw,prepared,tokens/train/{manifest.jsonl,files/}}
-├── mixed/{magicbrush_senior_1to1.jsonl,magicbrush_senior_all.jsonl}
-└── artifacts/gce_clusters_1024_512.pt
-```
-
-## 数据 contract 与检查
-
-训练输入是 canonical token manifest；每行须能定位 source/target/edit mask 与 token 文件，并
-保持 source spatial token、target token 和 mask 的既有语义。训练前运行：
+检查：
 
 ```bash
+command -v tmux && tmux -V
+test -f "$MODEL_PATH/config.json" && echo "MODEL CONFIG OK"
+test -d "$MODEL_PATH/vqvae" && echo "VQVAE OK"
+test -f "$DATA_CONFIG" && echo "MANIFEST OK"
+test -f "$GCE_CLUSTER_PATH" && echo "GCE CLUSTER OK"
+wc -l "$DATA_CONFIG" # 必须为 8807
+
 uv run python scripts/data/check_magicbrush.py all \
-  --manifest "$DATA_CONFIG" --model "$MODEL_PATH" --output "$OUTPUT_ROOT/data_audit"
+  --manifest "$DATA_CONFIG" --model "$MODEL_PATH" \
+  --output "$OUTPUT_ROOT/data_audit"
 ```
 
-Senior 原始数据尚不接入 trainer。未来 adapter 的 canonical raw manifest 每行必须至少为：
+helper 不下载权重、数据或 GCE cluster。若复制 manifest 后 `token_file` 指向旧绝对路径，只修正 manifest 内该路径，不必重新 tokenize。
 
-```json
-{"index": 0, "sample_key": "senior/...", "session_id": "...", "instruction": "...", "source": "...", "target": "...", "mask_edit": "..."}
-```
+## 2. 固定 matched 配置
 
-`source`、`target`、`mask_edit` 必须空间对齐；mask 的 `1/255` 表示编辑区域、`0` 表示未变
-区域；`sample_key` 必须在跨数据集范围全局唯一。MagicBrush 使用 `magicbrush/...` 前缀，
-Senior 使用 `senior/...` 前缀。拿到真实 Senior metadata 后，按“审计 schema → 转 canonical
-raw manifest → shared geometry → VQ tokenization → 验证 mask → 建 token manifest → 构建固定
-1:1 mixed manifest”的顺序实现，不把 Senior 专用 schema 写入 trainer。
+| 项目 | 值 |
+| --- | --- |
+| configs | `configs/train/ablation/mb_{ce,attention,gce}_2g_b8_a2.yaml` |
+| GPU / batch / accumulation / global batch | 2 / 8 / 2 / 32 |
+| seed / precision / max sequence | 42 / BF16 / 5120 |
+| optimizer | AdamW，lr=1e-5，warmup=20，clip=4.0 |
+| LoRA | rank=16，alpha=16，dropout=0.05 |
+| MagicBrush / epochs / steps per epoch | 8807 / 10 / 275 |
+| total steps / checkpoint interval | 2750 / 275 |
 
-GCE cluster 是 VQ codebook 的资产，不依赖某个数据集。存在时先检查；不存在时构建一次：
+`DistributedSampler(drop_last=True)` 和 `DataLoader(drop_last=True)` 下每 rank 每 epoch 是 550 micro-batches；accum=2，所以为 275 optimizer steps。checkpoint steps：275、550、825、1100、1375、1650、1925、2200、2475、2750。tmux helper 不改这三份 YAML。
+
+## 3. Smoke：前台运行
+
+从正式 YAML 复制一个 `/tmp` smoke config，只改输出名、`training.max_optimizer_steps=20` 和 `training.checkpoint_every_steps=20`；不要提交 smoke YAML。
 
 ```bash
-uv run python scripts/tools/gce/build_clusters.py \
-  --model "$MODEL_PATH" --output "$GCE_CLUSTER_PATH" \
-  --device cuda:0 --levels 1024 512 --seed 0
+uv run python - <<'PY'
+from pathlib import Path
+import yaml
+
+src = Path("configs/train/ablation/mb_attention_2g_b8_a2.yaml")
+dst = Path("/tmp/mb_attention_smoke.yaml")
+cfg = yaml.safe_load(src.read_text())
+cfg["experiment_name"] = cfg["output_name"] = "SMOKE-MB-ATTN-2G-B8-A2-S42"
+cfg["training"]["max_optimizer_steps"] = 20
+cfg["training"]["checkpoint_every_steps"] = 20
+dst.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
+print(dst)
+PY
+uv run python scripts/train/train.py --config /tmp/mb_attention_smoke.yaml
 ```
 
-## Matched training configuration
+GCE smoke 按相同方式使用 `mb_gce_2g_b8_a2.yaml`、`SMOKE-MB-GCE-2G-B8-A2-S42`、`/tmp/mb_gce_smoke.yaml`。两个 smoke 通过后再开始正式训练。
 
-正式 YAML 位于 `configs/train/ablation/`。共同设置为 2 GPU、batch/GPU=8、accum=2、
-global batch=32、seed=42、BF16、`max_seq_len=5120`、AdamW (`1e-5`, betas `[0.9,0.95]`,
-weight decay `0.1`)、clip `4.0`、warmup 20、LoRA rank/alpha/dropout=`16/16/0.05`，及
-`condition_dropout=0.1`。
-
-MagicBrush token manifest 有 8807 行。`DistributedSampler(drop_last=True)` 与
-`DataLoader(drop_last=True)` 下，每 rank 每 epoch 有 550 micro-batches；accum=2，故每 epoch
-为 275 optimizer steps。三组均训练 10 epochs=2750 steps，每 275 steps 保存 checkpoint：
-275、550、825、1100、1375、1650、1925、2200、2475、2750。
-
-| Run | Config | Objective |
-| --- | --- | --- |
-| E0 | `mb_ce_2g_b8_a2.yaml` | `L_total=L_gen` |
-| E1 | `mb_attention_2g_b8_a2.yaml` | `L_gen + 0.1 * L_attn`，layers 24–27 |
-| E2 | `mb_gce_2g_b8_a2.yaml` | `L_gen + 1.0 * L_gce`，levels 1024/512 |
-
-正式顺序是 Attention → GCE → CE；不要在本协议阶段把 smoke YAML 提交或启动完整训练。
+## 4. 正式 tmux 训练
 
 ```bash
-uv run python scripts/train/train.py --config configs/train/ablation/mb_attention_2g_b8_a2.yaml
-uv run python scripts/train/train.py --config configs/train/ablation/mb_gce_2g_b8_a2.yaml
-uv run python scripts/train/train.py --config configs/train/ablation/mb_ce_2g_b8_a2.yaml
+bash scripts/train/run_tmux.sh attention
+# Attention 的 exit code 为 0 后：
+bash scripts/train/run_tmux.sh gce
+# Attention 和 GCE 的 exit code 均为 0 后：
+bash scripts/train/run_tmux.sh ce
 ```
 
-## Loss curves 与 checkpoint/validation
+| Objective | tmux session | Config | Log | Exit code |
+| --- | --- | --- | --- | --- |
+| attention | `lumina_attn` | `mb_attention_2g_b8_a2.yaml` | `$OUTPUT_ROOT/logs/attention.log` | `$OUTPUT_ROOT/logs/attention.exit_code` |
+| gce | `lumina_gce` | `mb_gce_2g_b8_a2.yaml` | `$OUTPUT_ROOT/logs/gce.log` | `$OUTPUT_ROOT/logs/gce.exit_code` |
+| ce | `lumina_ce` | `mb_ce_2g_b8_a2.yaml` | `$OUTPUT_ROOT/logs/ce.log` | `$OUTPUT_ROOT/logs/ce.exit_code` |
 
-trainer 在 `$OUTPUT_ROOT/<output_name>/train_metrics.jsonl` 记录 optimizer-step 指标；checkpoint
-为 `checkpoint-000275/` 等。绘图只读取该 JSONL，不改训练过程：
+状态、日志和可选 attach：
+
+```bash
+bash scripts/train/run_tmux.sh status
+bash scripts/train/run_tmux.sh logs attention
+bash scripts/train/run_tmux.sh logs gce
+bash scripts/train/run_tmux.sh logs ce
+
+tmux attach -t lumina_attn
+tmux attach -t lumina_gce
+tmux attach -t lumina_ce
+```
+
+启动前会检查 tmux、环境变量、模型 `config.json`/`vqvae`、可创建 `OUTPUT_ROOT`、存在且为 8807 行的 manifest、目标 YAML、`CUDA_VISIBLE_DEVICES`；GCE 还检查 `GCE_CLUSTER_PATH`。同一 session 存在时会报 `session already exists`；任一另一个 Lumina session 存在时会报 `another Lumina training session is already active`。不会创建 `-2` 等替代 session。
+
+每次启动写入 `$OUTPUT_ROOT/logs/<objective>.command.sh`（owner-only）。launcher 显式 export snapshot，写入 date、hostname、pwd、Git SHA、GPU、资产路径和 config；stdout/stderr 写入 objective log。它用 `set -o pipefail` 和 `${PIPESTATUS[0]}` 记录真实 Python/torchrun exit code，而不是 `tee` 的返回值。
+
+## 5. 曲线与比较
 
 ```bash
 uv run python scripts/eval/plot_training_curves.py \
   --input "$OUTPUT_ROOT/MB-ATTN-2G-B8-A2-S42/train_metrics.jsonl" \
   --objective attention --steps-per-epoch 275 --smooth-window 25 \
   --output "$OUTPUT_ROOT/MB-ATTN-2G-B8-A2-S42/curves"
+
+uv run python scripts/eval/plot_training_curves.py \
+  --input "$OUTPUT_ROOT/MB-GCE-2G-B8-A2-S42/train_metrics.jsonl" \
+  --objective gce --steps-per-epoch 275 --smooth-window 25 \
+  --output "$OUTPUT_ROOT/MB-GCE-2G-B8-A2-S42/curves"
+
+uv run python scripts/eval/plot_training_curves.py \
+  --input "$OUTPUT_ROOT/MB-CE-2G-B8-A2-S42/train_metrics.jsonl" \
+  --objective ce --steps-per-epoch 275 --smooth-window 25 \
+  --output "$OUTPUT_ROOT/MB-CE-2G-B8-A2-S42/curves"
 
 uv run python scripts/eval/plot_training_curves.py compare \
   --ce "$OUTPUT_ROOT/MB-CE-2G-B8-A2-S42/train_metrics.jsonl" \
@@ -113,20 +156,21 @@ uv run python scripts/eval/plot_training_curves.py compare \
   --steps-per-epoch 275 --smooth-window 25 --output "$OUTPUT_ROOT/comparison"
 ```
 
-每图显示低透明度 raw curve 与 rolling mean，x 轴为 optimizer step，并在每个 epoch boundary
-标记虚线。Attention 输出 generation、raw/weighted attention、total、ratio、localization、entropy
-与 layer 24–27 localization 图；GCE 输出 generation、GCE、各 level、total；CE 输出 generation
-与 total。compare 只比较三组 `L_gen`，不能比较 `L_total`，因为 objective 的 total 定义不同。
+横向只比较三者 `L_gen`，不比较 `L_total`。Attention 曲线含 raw/weighted attention、ratio、localization、entropy 和 layers 24–27；GCE 含 GCE 与各 cluster level。
 
-## Senior mixed experiments
+## 6. 打包轻量结果
 
-第二阶段定义 M0=CE、M1=Attention、M2=GCE，首版采用 MagicBrush:Senior=1:1。若 Senior 也有
-8807 个样本，mixed manifest 为 17614 行，约 550 optimizer steps/epoch、10 epochs 为 5500
-steps；否则必须依最终 manifest 行数重新计算，不能沿用该估算。
+```bash
+git rev-parse HEAD > "$OUTPUT_ROOT/git_commit.txt"
+git status --short > "$OUTPUT_ROOT/git_status.txt"
+mkdir -p "$OUTPUT_ROOT/configs_used"
+cp configs/train/ablation/mb_{ce,attention,gce}_2g_b8_a2.yaml "$OUTPUT_ROOT/configs_used/"
+wc -l "$MAGICBRUSH_DATA_CONFIG" > "$OUTPUT_ROOT/dataset_count.txt"
+readlink -f "$MAGICBRUSH_DATA_CONFIG" > "$OUTPUT_ROOT/dataset_manifest_path.txt"
+readlink -f "$MODEL_PATH" > "$OUTPUT_ROOT/model_path.txt"
+cd "$(dirname "$OUTPUT_ROOT")"
+tar --exclude='checkpoint*' --exclude='*.pt' --exclude='*.pth' --exclude='*.safetensors' \
+  -czf lumina_objective_ablation_v1_results.tar.gz "$(basename "$OUTPUT_ROOT")"
+```
 
-## Experiment record
-
-每次运行记录：Run ID、Git SHA、manifest/样本数、objective、GPU IDs/type/count、batch/GPU、
-accumulation、global batch、seed、max sequence length、steps/epochs、LR、LoRA rank、auxiliary
-weight、开始/结束时间、wall time、peak VRAM、best checkpoint 与 notes。训练前不得在文档中宣称
-Attention 或 GCE 优于 CE。
+轻量包包含 configs、metrics、曲线、比较图、Git 信息、dataset/model path 与 logs/exit codes；不包含 checkpoint、权重或数据资产。
