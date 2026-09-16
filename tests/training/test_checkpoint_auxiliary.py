@@ -1,7 +1,7 @@
 import torch
 
-from model.configuration_llada import LLaDAConfig
-from model.modeling_xllmx_dimoo import LLaDAForMultiModalGeneration
+from models.lumina.configuration_llada import LLaDAConfig
+from models.lumina.modeling_xllmx_dimoo import LLaDAForMultiModalGeneration
 
 
 def test_whole_layer_checkpoint_returns_one_auxiliary_per_layer_with_gradients():

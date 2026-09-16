@@ -3,7 +3,7 @@ import copy
 import torch
 from torch import nn
 
-from lumina_dimoo.training.lora import LoRALinear, inject_lora
+from training.lora import LoRALinear, inject_lora
 
 
 class TinyBlock(nn.Module):

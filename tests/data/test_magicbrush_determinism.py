@@ -1,6 +1,6 @@
 import random
 
-from lumina_dimoo.data.magicbrush import stable_sample_seed
+from dataset.magicbrush import stable_sample_seed
 
 
 def test_sample_identity_seed_is_order_and_index_independent():

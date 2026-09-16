@@ -3,6 +3,8 @@ output_name: G1-GCE
 objective:
   mode: gce
 seed: 42
+dataset_config: configs/dataset/magicbrush.yaml
+distributed_config: configs/distributed/single_node.yaml
 paths:
   model_env: MODEL_PATH
   data_root_env: DATA_ROOT

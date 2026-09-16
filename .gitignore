@@ -1,2 +1,16 @@
 __pycache__/
+*.py[cod]
+
+.venv/
+*.egg-info/
+
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
 output/
+outputs/
+checkpoints/
+wandb/
+experiments/
+local_assets/
