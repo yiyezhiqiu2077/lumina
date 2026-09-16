@@ -35,6 +35,10 @@ SPECIAL_TOKENS = {
     "uncondition": 126351
 }
 
+# The VQ tokenizer uses a fixed codebook. Keep the value public so objectives
+# do not duplicate a magic number next to the image-token offset.
+VISUAL_CODEBOOK_SIZE = 8192
+
 # Prompt templates
 PROMPT_TEMPLATES = {
     "text_understanding": "You are a multimodal model that can process both text and images. Answer the following question based on the provided images. Analyze each image and combine relevant details to answer.",

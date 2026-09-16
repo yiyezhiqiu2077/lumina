@@ -1,0 +1,36 @@
+[project]
+name = "lumina-dimoo-magicbrush"
+version = "0.1.0"
+description = "Unified MagicBrush CE, attention-supervision, and GCE experiments"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+  "accelerate==1.14.0",
+  "diffusers==0.34.0",
+  "einops==0.8.2",
+  "numpy==1.26.4",
+  "pillow==10.4.0",
+  "pyyaml==6.0.3",
+  "safetensors==0.8.0",
+  "sentencepiece==0.2.2",
+  "torch==2.3.1",
+  "torchaudio==2.3.1",
+  "torchvision==0.18.1",
+  "transformers==4.46.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["config"]
+
+[tool.setuptools.packages.find]
+where = ["src", "."]
+include = ["lumina_dimoo*", "model*", "datasets*", "attention_supervision*", "objectives*", "training*", "utils*", "xllmx*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,6 +1,6 @@
 import torch
 
-from attention_supervision.attention_loss import layer_attention_auxiliary, spatial_cross_entropy
+from lumina_dimoo.objectives.attention import layer_attention_auxiliary, spatial_cross_entropy
 
 
 def test_inside_attention_has_lower_loss_than_outside_attention():

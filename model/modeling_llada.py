@@ -655,8 +655,8 @@ class LLaDABlock(nn.Module):
         Computes scaled dot product attention on query, key and value tensors, using an optional
         attention mask if passed, and applying dropout if a probability greater than 0.0 is specified.
         """
-        if attn_mask is not None or is_causal:
-            raise AssertionError("Lumina-DiMOO runtime audit requires attn_mask=None and is_causal=False")
+        if is_causal:
+            raise AssertionError("Lumina-DiMOO image editing attention must remain non-causal")
         if self.flash_attn_func is not None and attn_mask is None:
             r = self.flash_attn_func(
                 q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), dropout_p=dropout_p, causal=False
@@ -672,12 +672,13 @@ class LLaDABlock(nn.Module):
                 k = k.repeat_interleave(num_q_heads // num_kv_heads, dim=1, output_size=num_q_heads)
                 v = v.repeat_interleave(num_q_heads // num_kv_heads, dim=1, output_size=num_q_heads)
 
-            # Modify: MDM set causal to False, and with no attn_mask.
+            # Boolean masks use True for allowed query/key pairs. In padded
+            # batches this prevents padded K/V from affecting real tokens.
             return F.scaled_dot_product_attention(
                 q,
                 k,
                 v,
-                attn_mask=None,
+                attn_mask=attn_mask,
                 dropout_p=dropout_p,
                 is_causal=False,
             )
@@ -736,7 +737,7 @@ class LLaDABlock(nn.Module):
                 attention_active,
             )
 
-        if attention_bias is not None:
+        if attention_bias is not None and attention_bias.dtype != torch.bool:
             # Resize and cast attention bias.
             # The current dtype of the attention bias might not match the dtype that the SDP attn function will
             # run in if AMP is enabled, and this can be a problem if some tokens are masked out due to padding
@@ -753,7 +754,7 @@ class LLaDABlock(nn.Module):
             q,
             k,
             v,
-            attn_mask=None,
+            attn_mask=attention_bias,
             dropout_p=0.0 if not self.training else self.config.attention_dropout,
             is_causal=False,
         )
