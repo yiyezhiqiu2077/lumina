@@ -11,11 +11,8 @@ import torch.distributed as dist
 from torch.utils.data import Dataset, DataLoader, DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from transformers import AutoConfig, AutoTokenizer
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
-from config import SPECIAL_TOKENS
-from model import LLaDAForMultiModalGeneration
+from utils.constants import SPECIAL_TOKENS
+from models.lumina.modeling_xllmx_dimoo import LLaDAForMultiModalGeneration
 from utils.image_utils import decode_vq_to_image, calculate_vq_params, add_break_line
 from generators.image_generation_generator import generate_image
 from utils.generation_utils import setup_seed

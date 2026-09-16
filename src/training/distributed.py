@@ -116,6 +116,7 @@ def run(args):
     local_rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
+    runtime_dtype = torch.bfloat16
     seed_all(args.seed + rank)
     args.output.mkdir(parents=True, exist_ok=True)
     if rank == 0:
@@ -131,7 +132,7 @@ def run(args):
 
     tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True, local_files_only=True)
     model = LLaDAForMultiModalGeneration.from_pretrained(
-        args.model, torch_dtype=torch.bfloat16, local_files_only=True, low_cpu_mem_usage=True
+        args.model, torch_dtype=runtime_dtype, local_files_only=True, low_cpu_mem_usage=True
     )
     if model.config.block_type != "llama" or model.config.n_layers != 32:
         raise AssertionError(f"unexpected runtime architecture: {model.config.block_type}, {model.config.n_layers}")
@@ -228,7 +229,7 @@ def run(args):
                 }
             boundary = (micro_step + 1) % args.gradient_accumulation == 0
             sync_context = contextlib.nullcontext() if boundary else model.no_sync()
-            with sync_context, torch.autocast("cuda", dtype=torch.bfloat16):
+            with sync_context, torch.autocast("cuda", dtype=runtime_dtype):
                 result = run_model_for_objective(
                     model,
                     objective=args.objective,

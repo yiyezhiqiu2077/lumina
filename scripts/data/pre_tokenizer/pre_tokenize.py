@@ -1,6 +1,4 @@
 import os
-import sys
-sys.path.append(os.path.abspath(__file__).rsplit("/", 2)[0])
 
 from argparse import ArgumentParser
 import json
@@ -10,8 +8,7 @@ from PIL import Image
 import random
 import pandas as pd
 
-from data.item_processor import DimooItemProcessor
-from data.item_processor import var_center_crop, generate_crop_size_list
+from xllmx.data.dimoo_item_processor import DimooItemProcessor, generate_crop_size_list, var_center_crop
 
 
 class ItemProcessor(DimooItemProcessor):

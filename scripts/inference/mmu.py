@@ -9,11 +9,8 @@ from PIL import Image
 import torch
 import time
 from transformers import AutoConfig, AutoTokenizer
-import sys
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
-from config import SPECIAL_TOKENS
-from model import LLaDAForMultiModalGeneration
+from utils.constants import SPECIAL_TOKENS
+from models.lumina.modeling_xllmx_dimoo import LLaDAForMultiModalGeneration
 from utils.image_utils import preprocess_image, encode_img_with_breaks, calculate_vq_params, generate_crop_size_list, var_center_crop, add_break_line
 from generators.text_understanding_generator import generate_text_understanding
 from utils.prompt_utils import generate_multimodal_understanding_prompt

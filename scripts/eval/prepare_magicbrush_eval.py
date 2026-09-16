@@ -4,7 +4,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from datasets.magicbrush_dataset import enrich_geometry, read_jsonl, resolve_record_paths, write_jsonl
+from dataset.geometry import enrich_geometry, resolve_record_paths
+from dataset.utils import read_jsonl, write_jsonl
 
 
 def main():

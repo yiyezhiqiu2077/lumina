@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 init_from=your/download_model/path # Model path downloaded from huggingface (Alpha-VLLM/Lumina-DiMOO)
-data_config=configs/data.yaml # You need to define the data in this yaml file.
+data_config=configs/upstream/data.yaml # You need to define the data in this yaml file.
 lr=2e-5
 wd=0.1
 dropout=0.05
@@ -12,7 +12,7 @@ echo "exp name: $exp_name  node: $SLURMD_NODENAME"
 mkdir -p output/"$exp_name"
 
 srun -J Lumina-DiMOO-SFT --partition luminaDLLM --gres gpu:8 --nodes 8 --ntasks-per-node 8 --quotatype reserved \
-python -u train/train.py \
+python -u scripts/train/upstream/train.py \
 --batch_size ${batchsize_per_gpu} \
 --accum_iter 4 \
 --epochs 2 \

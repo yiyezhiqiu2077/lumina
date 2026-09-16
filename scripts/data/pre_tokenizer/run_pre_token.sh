@@ -12,7 +12,7 @@ do
   gpu_id=$((i % 8))
   export CUDA_VISIBLE_DEVICES=${gpu_id}
 
-  python3 -u pre_tokenizer/pre_tokenize.py \
+  python3 -u scripts/data/pre_tokenizer/pre_tokenize.py \
     --splits=32 \
     --rank=${i} \
     --in_filename "$in_filename"  \
@@ -22,6 +22,6 @@ do
 done
 
 # Step2 concatenate all the sub-records into one json file
-python3 -u pre_tokenizer/concat_record.py \
+python3 -u scripts/data/pre_tokenizer/concat_record.py \
   --sub_record_dir "$out_dir" \
   --save_path "$out_dir/all_records.json"

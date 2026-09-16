@@ -8,7 +8,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import Dataset
 
-from config import SPECIAL_TOKENS
+from utils.constants import SPECIAL_TOKENS
 from dataset.utils import read_jsonl
 from utils.prompt_utils import create_prompt_templates
 

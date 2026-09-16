@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import json
 import math
 import random
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from PIL import Image
-
 
 @dataclass(frozen=True)
 class SharedGeometry:
@@ -22,17 +20,6 @@ class SharedGeometry:
 
     def as_dict(self) -> dict:
         return asdict(self)
-
-
-def read_jsonl(path: Path) -> list[dict]:
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-
-
-def write_jsonl(path: Path, rows: list[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def resolve_record_paths(record: dict, manifest: Path) -> dict:

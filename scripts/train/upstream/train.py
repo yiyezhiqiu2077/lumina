@@ -7,10 +7,9 @@ import os
 import numpy as np
 import torch.nn as nn
 import math
-from transformers import AutoTokenizer, AutoConfig
 import sys
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from model import LLaDAForMultiModalGeneration
+from transformers import AutoTokenizer, AutoConfig
+from models.lumina.modeling_xllmx_dimoo import LLaDAForMultiModalGeneration
 from xllmx.data.item_processor import ItemProcessorBase
 from xllmx.solvers.finetune import FinetuneSolverBase
 
@@ -183,6 +182,9 @@ class Solver(FinetuneSolverBase):
         model.model.transformer.ff_out = torch.nn.Linear(4096, len(tokenizer), bias=False) # model dim --> 4096
 
 if __name__ == "__main__":
-    args = Solver.get_args_parser().parse_args()
-    solver = Solver(args)
-    solver.run()
+    parser = Solver.get_args_parser()
+    if "--help" in sys.argv or "-h" in sys.argv:
+        parser.print_help()
+    else:
+        solver = Solver(parser.parse_args())
+        solver.run()

@@ -6,7 +6,7 @@ import torch
 import math
 from typing import Callable, Optional
 from utils.generation_utils import cosine_schedule, gumbel_max_sample, mask_by_random_topk
-from model import LLaDAForMultiModalGeneration
+from models.lumina.modeling_xllmx_dimoo import LLaDAForMultiModalGeneration
 
 
 @torch.no_grad()
