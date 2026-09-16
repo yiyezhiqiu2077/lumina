@@ -1,7 +1,8 @@
 import functools
 import logging
 import math
-from typing import List
+from dataclasses import dataclass
+from typing import List, Optional
 import torch.nn.functional as F
 import torch
 from torch import nn
@@ -9,7 +10,26 @@ from transformers import AutoTokenizer, AutoConfig
 from .modeling_llada import LLaDAModelLM
 from .configuration_llada import LLaDAConfig
 from transformers.modeling_outputs import CausalLMOutputWithPast
-__all__ = ["LLaDAForMultiModalGeneration"]
+__all__ = ["LLaDAForMultiModalGeneration", "MagicBrushModelOutput"]
+
+
+@dataclass
+class MagicBrushModelOutput:
+    """Training-only output shared by CE, attention, and GCE objectives."""
+
+    generation_loss: torch.Tensor
+    logits: torch.Tensor
+    labels: torch.Tensor
+    attention_auxiliary: Optional[torch.Tensor] = None
+
+
+def pad_batch_sequences(sequences, pad_value: int, max_tokens: int | None = None) -> list[list[int]]:
+    max_tokens = max_tokens or max(len(sequence) for sequence in sequences)
+    return [list(sequence) + [pad_value] * (max_tokens - len(sequence)) for sequence in sequences]
+
+
+def pad_batch_labels(labels, max_tokens: int) -> list[list[int]]:
+    return [list(label) + [-100] * (max_tokens - len(label)) for label in labels]
 
 def create_attention_mask(original_lengths, max_tokens, device):
     batch_size = len(original_lengths)
@@ -26,6 +46,7 @@ class LLaDAForMultiModalGeneration(LLaDAModelLM):
         super().__init__(config, *args, **kwargs)
     
     def forward(self, input_ids=None, labels=None, infer=False, use_cache=False, to_compute_mask=None, cat='', **kwargs):
+        return_training_output = bool(kwargs.pop("return_training_output", False))
         attention_supervision_layers = kwargs.pop("attention_supervision_layers", None)
         instruction_token_mask = kwargs.pop("instruction_token_mask", None)
         source_spatial_mask = kwargs.pop("source_spatial_mask", None)
@@ -39,7 +60,7 @@ class LLaDAForMultiModalGeneration(LLaDAModelLM):
         # ========================================================
         max_tokens = max([len(_) for _ in input_ids])
         original_lengths = [len(example) for example in input_ids] # every sample len --> record for attention mask
-        input_ids = [example + [0] * (max_tokens - len(example)) for example in input_ids] # padding 0 to right --> max length
+        input_ids = pad_batch_sequences(input_ids, self.config.pad_token_id, max_tokens)
         input_ids = torch.tensor(input_ids, dtype=torch.int64, device=self.device) 
         # attn mask
         attention_mask = create_attention_mask(original_lengths, max_tokens, self.device)
@@ -80,10 +101,19 @@ class LLaDAForMultiModalGeneration(LLaDAModelLM):
         # ========================================================
         # padding label batch len & loss
         # ========================================================
-        labels = [label + [-100] * (max_tokens - len(label)) for label in labels] # padding -100 to right --> max length
+        if labels is None:
+            raise ValueError("labels are required when infer=False")
+        labels = pad_batch_labels(labels, max_tokens)
         labels = torch.tensor(labels, dtype=torch.int64, device=self.device)
         logits = output.logits
         loss = F.cross_entropy(logits.contiguous().view(-1, logits.shape[-1]), labels.contiguous().view(-1), ignore_index=-100,)
+        if return_training_output:
+            return MagicBrushModelOutput(
+                generation_loss=loss,
+                logits=logits,
+                labels=labels,
+                attention_auxiliary=attention_auxiliary if return_attention_auxiliary else None,
+            )
         return (loss, attention_auxiliary) if return_attention_auxiliary else loss
     
     def get_fsdp_wrap_module_list(self) -> List:

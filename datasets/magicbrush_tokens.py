@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import math
 import random
 from pathlib import Path
@@ -10,6 +11,16 @@ from torch.utils.data import Dataset
 from config import SPECIAL_TOKENS
 from datasets.magicbrush_dataset import read_jsonl
 from utils.prompt_utils import create_prompt_templates
+
+
+def stable_sample_seed(global_seed: int, epoch: int, sample_key: str) -> int:
+    """Return a process-independent RNG seed for one logical training sample.
+
+    `sample_key`, rather than manifest index, makes corruption invariant to
+    sampler order, DataLoader workers, rank, and manifest reordering.
+    """
+    payload = f"{int(global_seed)}\0{int(epoch)}\0{sample_key}".encode("utf-8")
+    return int.from_bytes(hashlib.blake2b(payload, digest_size=16).digest(), "big")
 
 
 def _find_unique_subsequence(sequence: list[int], needle: list[int]) -> tuple[int, int]:
@@ -69,18 +80,25 @@ class MagicBrushTokenDataset(Dataset):
         self.condition_dropout = condition_dropout
         self.seed = seed
         self.fixed_corruption = fixed_corruption
+        self.epoch = 0
         self.system_prompt = create_prompt_templates()["image_editing"]
 
     def __len__(self):
         return len(self.rows)
 
-    def _rng(self, index: int) -> random.Random:
-        return random.Random(self.seed + index) if self.fixed_corruption else random
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = int(epoch)
+
+    def _rng(self, sample_key: str) -> random.Random:
+        # Fixed probes intentionally remain fixed across epochs, while normal
+        # training changes corruption only with the logical epoch.
+        epoch = 0 if self.fixed_corruption else self.epoch
+        return random.Random(stable_sample_seed(self.seed, epoch, sample_key))
 
     def __getitem__(self, index: int) -> dict:
         row = self.rows[index]
         payload = torch.load(row["token_file"], map_location="cpu", weights_only=True)
-        rng = self._rng(index)
+        rng = self._rng(str(row["sample_key"]))
         conditional = rng.random() >= self.condition_dropout
         instruction = row["instruction"] if conditional else "<uncondition>"
         formatted = f"<system>{self.system_prompt}</system><user>{instruction}</user>"
