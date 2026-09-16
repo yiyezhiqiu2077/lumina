@@ -21,6 +21,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest==9.1.1"]
 upstream = ["fairscale", "h5py", "pandas", "tensorboard"]
+analysis = ["matplotlib>=3.8,<4"]
 
 [build-system]
 requires = ["setuptools>=68"]
