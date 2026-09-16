@@ -5,12 +5,12 @@
 
 ## 实现
 
-- `dataset/`：MagicBrush sequence、稳定 corruption、几何预处理、tokenization 与审计。
-- `models/lumina/`：Lumina 模型；`models/objectives/`：attention 与 GCE objective。
-- `training/`：配置、DDP、LoRA、checkpoint 与 objective dispatch。
-- `utils/`：token 常量、prompt 和图像/生成工具。
-- `generators/`：T2I、I2I、hard-lock editing 和 MMU 采样实现。
-- `xllmx/`：原始 Lumina SFT 所需的上游 package。
+- `src/dataset/`：MagicBrush sequence、稳定 corruption、几何预处理、tokenization 与审计。
+- `src/models/lumina/`：Lumina 模型；`src/models/objectives/`：attention 与 GCE objective。
+- `src/training/`：配置、DDP、LoRA、checkpoint 与 objective dispatch。
+- `src/utils/`：token 常量、prompt 和图像/生成工具。
+- `src/generators/`：T2I、I2I、hard-lock editing 和 MMU 采样实现。
+- `src/xllmx/`：原始 Lumina SFT 所需的上游 package。
 
 ## 入口与配置
 
