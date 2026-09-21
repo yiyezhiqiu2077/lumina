@@ -35,12 +35,17 @@ uv sync --extra dev
 
 export MODEL_PATH=/path/to/Lumina-DiMOO
 export DATA_ROOT=/path/to/MagicBrush
-export OUTPUT_ROOT=/path/to/lumina_outputs
+export EXPERIMENT_ROOT=/path/to/experiments/lumina
+export OUTPUT_ROOT="$EXPERIMENT_ROOT/formal/lumina_objective_ablation_8g_v3_lr3e6_20260918"
 ```
 
 `uv sync` 会按项目锁定的 PyTorch CUDA 12.1 wheel index 安装依赖。数据根目录应包含
 `official_tokens/train/manifest.jsonl`；模型权重、MagicBrush 数据、GCE cluster、日志和
 checkpoint 均不在 Git 中。
+
+推荐将本项目的实验结果统一放在一个项目目录下，例如 `experiments/lumina/`，并按
+`formal/`、`probes/`、`smokes/`、`archives/` 分层保存。`OUTPUT_ROOT` 应始终指向某一次
+单独运行的根目录，而不是共享父目录。
 
 ## 三个启动入口
 
@@ -79,9 +84,10 @@ uv run python scripts/train/train.py --config configs/train/magicbrush_gce.yaml 
 ## Matched Objective Ablation
 
 严格 matched 的 CE / Attention / GCE 对照实验位于
-[`configs/train/ablation/`](configs/train/ablation/)，统一使用 2 GPU、每卡 batch 8、gradient
-accumulation 2、global batch 32 和相同的训练 schedule。完整的环境、资产准备、前台 smoke、
-一条命令 tmux 正式启动、resume、曲线与结果打包流程见
+[`configs/train/ablation/`](configs/train/ablation/)，统一使用 8 GPU、每卡 batch 4、gradient
+accumulation 1、global batch 32 和相同的训练 schedule。matched recipe 还统一使用 sample-mean
+supervised-token reduction、`1e-5` logit z-loss、显式 LoRA targets 与 fail-fast quality gate。完整的环境、
+资产准备、三目标 tmux smoke、保持正式 2,750-step cosine horizon 且分别覆盖已知 step-1450 延迟失稳区的 1,650-step matched 长探针、一条命令 tmux 正式启动、安全 resume、曲线与结果打包流程见
 [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md)。
 
 `configs/train/magicbrush_*.yaml` 是既有实验配置；它们保留用于历史实验，不构成这三种

@@ -10,7 +10,14 @@ from transformers import AutoTokenizer, AutoConfig
 from .modeling_llada import LLaDAModelLM
 from .configuration_llada import LLaDAConfig
 from transformers.modeling_outputs import CausalLMOutputWithPast
-__all__ = ["LLaDAForMultiModalGeneration", "MagicBrushModelOutput"]
+
+from models.objectives.reduction import reduce_supervised_values
+
+__all__ = [
+    "LLaDAForMultiModalGeneration",
+    "MagicBrushModelOutput",
+    "generation_ce_and_z_loss",
+]
 
 
 @dataclass
@@ -21,6 +28,32 @@ class MagicBrushModelOutput:
     logits: torch.Tensor
     labels: torch.Tensor
     attention_auxiliary: Optional[torch.Tensor] = None
+    generation_z_loss: Optional[torch.Tensor] = None
+    valid_target_count: Optional[torch.Tensor] = None
+    max_abs_valid_logit: Optional[torch.Tensor] = None
+
+
+def generation_ce_and_z_loss(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+    reduction: str,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return CE, raw log-normalizer z-loss, target count, and max valid logit."""
+    valid = labels != -100
+    valid_logits = logits[valid].float()
+    valid_targets = labels[valid]
+    if not valid_targets.numel():
+        zero = logits.float().sum() * 0.0
+        return zero, zero, valid.sum(), zero.detach()
+    token_ce = F.cross_entropy(valid_logits, valid_targets, reduction="none")
+    token_z = torch.logsumexp(valid_logits, dim=-1).square()
+    per_position_ce = logits.new_zeros(labels.shape, dtype=torch.float32)
+    per_position_z = logits.new_zeros(labels.shape, dtype=torch.float32)
+    per_position_ce[valid] = token_ce
+    per_position_z[valid] = token_z
+    ce = reduce_supervised_values(per_position_ce, valid, reduction)
+    z_loss = reduce_supervised_values(per_position_z, valid, reduction)
+    return ce, z_loss, valid.sum(), valid_logits.detach().abs().max()
 
 
 def pad_batch_sequences(sequences, pad_value: int, max_tokens: int | None = None) -> list[list[int]]:
@@ -47,6 +80,7 @@ class LLaDAForMultiModalGeneration(LLaDAModelLM):
 
     def forward(self, input_ids=None, labels=None, infer=False, use_cache=False, to_compute_mask=None, cat='', **kwargs):
         return_training_output = bool(kwargs.pop("return_training_output", False))
+        loss_reduction = kwargs.pop("loss_reduction", "sample_mean")
         attention_supervision_layers = kwargs.pop("attention_supervision_layers", None)
         instruction_token_mask = kwargs.pop("instruction_token_mask", None)
         source_spatial_mask = kwargs.pop("source_spatial_mask", None)
@@ -106,13 +140,20 @@ class LLaDAForMultiModalGeneration(LLaDAModelLM):
         labels = pad_batch_labels(labels, max_tokens)
         labels = torch.tensor(labels, dtype=torch.int64, device=self.device)
         logits = output.logits
-        loss = F.cross_entropy(logits.contiguous().view(-1, logits.shape[-1]), labels.contiguous().view(-1), ignore_index=-100,)
+        loss, z_loss, valid_target_count, max_abs_valid_logit = generation_ce_and_z_loss(
+            logits,
+            labels,
+            loss_reduction,
+        )
         if return_training_output:
             return MagicBrushModelOutput(
                 generation_loss=loss,
                 logits=logits,
                 labels=labels,
                 attention_auxiliary=attention_auxiliary if return_attention_auxiliary else None,
+                generation_z_loss=z_loss,
+                valid_target_count=valid_target_count,
+                max_abs_valid_logit=max_abs_valid_logit,
             )
         return (loss, attention_auxiliary) if return_attention_auxiliary else loss
 

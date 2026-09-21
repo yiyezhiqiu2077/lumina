@@ -1,11 +1,14 @@
 # Objective ablation 一条命令实验指南
 
-本轮 MagicBrush objective ablation 采用相同数据、seed、LoRA、optimizer、batch 与 schedule，比较 CE、Attention、GCE 三个 objective。正式运行顺序固定为 Attention → GCE → CE，三者均使用 GPU 0/1，不能并发。
+本轮 MagicBrush objective ablation 采用相同数据、seed、LoRA、optimizer、batch 与 schedule，比较 CE、Attention、GCE 三个 objective。正式运行顺序固定为 Attention → GCE → CE，三者均使用 GPU 0–7，不能并发。
 
 ```bash
-bash scripts/train/run_tmux.sh attention
-bash scripts/train/run_tmux.sh gce
-bash scripts/train/run_tmux.sh ce
+bash scripts/train/run_tmux.sh all
+
+# 也可手工串行：
+# bash scripts/train/run_tmux.sh attention
+# bash scripts/train/run_tmux.sh gce
+# bash scripts/train/run_tmux.sh ce
 ```
 
 这些命令创建 detached tmux session。不需要先进入 tmux、在 tmux 内重新 export 环境变量，或手工 Ctrl+B D。
@@ -20,11 +23,12 @@ uv sync --extra dev --extra upstream --extra analysis
 export ASSET_ROOT=/path/to/lumina_assets
 export DATA_ROOT="$ASSET_ROOT/datasets/lumina_edit"
 export MODEL_PATH="$ASSET_ROOT/models/Lumina-DiMOO"
-export OUTPUT_ROOT=/path/to/experiments/lumina_objective_ablation_v1
+export EXPERIMENT_ROOT=/path/to/experiments/lumina
+export OUTPUT_ROOT="$EXPERIMENT_ROOT/formal/lumina_objective_ablation_8g_v3_lr3e6_20260918"
 export MAGICBRUSH_DATA_CONFIG="$DATA_ROOT/magicbrush/tokens/train/manifest.jsonl"
 export DATA_CONFIG="$MAGICBRUSH_DATA_CONFIG"
 export GCE_CLUSTER_PATH="$DATA_ROOT/artifacts/gce_clusters_1024_512.pt"
-export CUDA_VISIBLE_DEVICES=0,1
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 ```
 
 启动 helper 前，在普通 shell 中一次性设置这些变量。helper 会用安全 shell quoting 将调用时刻的 `PROJECT_ROOT`、`ASSET_ROOT`、`DATA_ROOT`、`MODEL_PATH`、`OUTPUT_ROOT`、`MAGICBRUSH_DATA_CONFIG`、`DATA_CONFIG`、`GCE_CLUSTER_PATH`、`CUDA_VISIBLE_DEVICES` snapshot 到 launcher，不依赖旧 tmux server 的环境。
@@ -45,6 +49,8 @@ uv run python scripts/data/check_magicbrush.py all \
 ```
 
 正式 launcher 不下载权重、数据或 GCE cluster。若复制 manifest 后 `token_file` 指向旧绝对路径，只修正 manifest 内该路径，不必重新 tokenize。
+
+推荐目录组织如下：`$EXPERIMENT_ROOT/formal/` 保存正式 Attention → GCE → CE 串行结果，`$EXPERIMENT_ROOT/probes/` 保存长探针，`$EXPERIMENT_ROOT/smokes/` 保存 Smoke，`$EXPERIMENT_ROOT/archives/` 保存轻量打包结果。`OUTPUT_ROOT` 必须始终是其中某个单独 run 的根目录，不能直接设为 `$EXPERIMENT_ROOT`。
 
 ### 2.1 已有或下载 Lumina-DiMOO 权重
 
@@ -169,38 +175,45 @@ export GCE_CLUSTER_PATH="$DATA_ROOT/artifacts/gce_clusters_1024_512.pt"
 
 | 项目 | 值 |
 | --- | --- |
-| configs | `configs/train/ablation/mb_{ce,attention,gce}_2g_b8_a2.yaml` |
-| GPU / batch / accumulation / global batch | 2 / 8 / 2 / 32 |
+| configs | `configs/train/ablation/mb_{ce,attention,gce}_8g_b4_a1.yaml` |
+| GPU / batch / accumulation / global batch | 8 / 4 / 1 / 32 |
 | seed / precision / max sequence | 42 / BF16 / 5120 |
-| optimizer | AdamW，lr=1e-5，warmup=20，clip=4.0 |
-| LoRA | rank=16，alpha=16，dropout=0.05 |
+| optimizer | AdamW，lr=3e-6，betas=(0.9, 0.95)，warmup=20，clip=4.0 |
+| generation loss | sample-mean CE + `1e-5 × z-loss`（supervised target positions，FP32） |
+| LoRA | rank=16，alpha=16，dropout=0.05；q/k/v/out projection |
+| quality gate | early baseline、50-step disjoint windows、loss/logit/update/clipping checks |
 | MagicBrush / epochs / steps per epoch | 8807 / 10 / 275 |
 | total steps / checkpoint interval | 2750 / 275 |
 
-`DistributedSampler(drop_last=True)` 和 `DataLoader(drop_last=True)` 下每 rank 每 epoch 是 550 micro-batches；accum=2，所以为 275 optimizer steps。checkpoint steps：275、550、825、1100、1375、1650、1925、2200、2475、2750。tmux helper 不改这三份 YAML。
+`DistributedSampler(drop_last=True)` 下每 rank 每 epoch 是 1100 个样本（全局丢弃 7 个）；`DataLoader(batch=4, drop_last=True)` 产生 275 micro-batches。accum=1，所以仍为 275 optimizer steps。checkpoint steps：275、550、825、1100、1375、1650、1925、2200、2475、2750。全局 batch 仍为 32，三组实验的训练量与 schedule 保持 matched。
 
-## 3. Smoke：前台运行
+## 3. Smoke 与长稳定性验证
 
-从正式 YAML 复制一个 `/tmp` smoke config，只改输出名、`training.max_optimizer_steps=20` 和 `training.checkpoint_every_steps=20`；不要提交 smoke YAML。
+短 smoke 串行执行 Attention → GCE → CE，各跑 20 step，用于验证启动、objective 隔离、checkpoint 和清理；它不代表长期稳定：
 
 ```bash
-uv run python - <<'PY'
-from pathlib import Path
-import yaml
-
-src = Path("configs/train/ablation/mb_attention_2g_b8_a2.yaml")
-dst = Path("/tmp/mb_attention_smoke.yaml")
-cfg = yaml.safe_load(src.read_text())
-cfg["experiment_name"] = cfg["output_name"] = "SMOKE-MB-ATTN-2G-B8-A2-S42"
-cfg["training"]["max_optimizer_steps"] = 20
-cfg["training"]["checkpoint_every_steps"] = 20
-dst.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
-print(dst)
-PY
-uv run python scripts/train/train.py --config /tmp/mb_attention_smoke.yaml
+bash scripts/train/run_smokes_tmux.sh start
+bash scripts/train/run_smokes_tmux.sh status
+bash scripts/train/run_smokes_tmux.sh logs
 ```
 
-GCE smoke 按相同方式使用 `mb_gce_2g_b8_a2.yaml`、`SMOKE-MB-GCE-2G-B8-A2-S42`、`/tmp/mb_gce_smoke.yaml`。两个 smoke 通过后再开始正式训练。
+在正式实验前，必须让 CE、Attention 和 GCE 分别从 base model、各自全新的 `OUTPUT_ROOT` 运行到 step 1650，跨过已知的 step-1450 延迟失稳区：
+
+```bash
+bash scripts/train/run_probe_tmux.sh attention 1650
+bash scripts/train/run_probe_tmux.sh status
+bash scripts/train/run_probe_tmux.sh logs
+
+# Attention 完成并释放八卡后，在新的 OUTPUT_ROOT 运行：
+bash scripts/train/run_probe_tmux.sh gce 1650
+
+# GCE 完成并释放八卡后，再在新的 OUTPUT_ROOT 运行：
+bash scripts/train/run_probe_tmux.sh ce 1650
+```
+
+`5e-6` 虽曾通过 825-step probes 和 20-step Smoke，却在 fresh 正式 Attention 的 step 1450 发生延迟 generation-loss 发散，因此不能作为正式 recipe。只将 peak LR 单变量降低到 `3e-6` 后，Attention、GCE、CE 三个 matched 1650-step 长探针均达到 `exit_code=0`、`quality_status.json=SUCCEEDED`、metrics 1–1650 连续、六个 checkpoint 完整，且 step 1301–1650 的 generation-loss 窗口无持续回归。因此正式 recipe 固定使用经验证的 `3e-6` peak LR。
+
+长探针的 `max_optimizer_steps=1650` 只限定实际停止步数；生成配置显式保留 `scheduler_horizon_steps=2750`，所以其前 1650 步 LR 与正式 recipe 完全一致。探针 fingerprint 同时记录停止步数和 scheduler horizon。探针不得从旧版或已判为失败的 checkpoint resume，也不得把探针 checkpoint 用作正式 2750-step run 的恢复点。短 Smoke 只验证启动和 objective 隔离，不能替代长稳定性验证。
 
 ## 4. 正式 tmux 训练
 
@@ -213,32 +226,32 @@ bash scripts/train/run_tmux.sh gce
 bash scripts/train/run_tmux.sh ce
 ```
 
-fresh run 发现对应 objective output 下已有 `train_metrics.jsonl`、`checkpoint-*`、`experiment_config.json` 或 `lora_report.json` 时会拒绝启动，避免污染旧实验。请换用新的 `OUTPUT_ROOT`；若确实要继续同一 run，只能显式 resume：
+fresh run 发现对应 objective output、quality 文件、launcher/log 或 checkpoint 已存在时会拒绝启动，避免污染旧实验。每个诊断 cohort 与正式重跑都应使用新的 `OUTPUT_ROOT`；若确实要继续同一 run，只能显式 resume：
 
 ```bash
 # Resume Attention
 bash scripts/train/run_tmux.sh attention \
   --resume-from-checkpoint \
-  "$OUTPUT_ROOT/MB-ATTN-2G-B8-A2-S42/checkpoint-001375"
+  "$OUTPUT_ROOT/MB-ATTN-8G-B4-A1-S42/checkpoint-001375"
 
 # Resume GCE
 bash scripts/train/run_tmux.sh gce \
   --resume-from-checkpoint \
-  "$OUTPUT_ROOT/MB-GCE-2G-B8-A2-S42/checkpoint-001375"
+  "$OUTPUT_ROOT/MB-GCE-8G-B4-A1-S42/checkpoint-001375"
 
 # Resume CE
 bash scripts/train/run_tmux.sh ce \
   --resume-from-checkpoint \
-  "$OUTPUT_ROOT/MB-CE-2G-B8-A2-S42/checkpoint-001375"
+  "$OUTPUT_ROOT/MB-CE-8G-B4-A1-S42/checkpoint-001375"
 ```
 
-resume checkpoint 必须存在，且必须位于该 objective 的正确实验目录中。resume 同样执行 session / GPU 冲突检查。
+resume checkpoint 必须存在且位于该 objective 的正确实验目录中，并具有 `_SUCCESS`、`checkpoint_meta.json`、LoRA 权重和全部 8 个 rank state。trainer 还会核验 run fingerprint 与 `train_metrics.jsonl` 的 1..step 连续性；任何 loss semantics、schedule、模型、数据或代码差异都会拒绝恢复。resume 同样执行 session / GPU 冲突检查。
 
-| Objective | tmux session | Config | Log | Exit code |
-| --- | --- | --- | --- | --- |
-| attention | `lumina_attn` | `mb_attention_2g_b8_a2.yaml` | `$OUTPUT_ROOT/logs/attention.log` | `$OUTPUT_ROOT/logs/attention.exit_code` |
-| gce | `lumina_gce` | `mb_gce_2g_b8_a2.yaml` | `$OUTPUT_ROOT/logs/gce.log` | `$OUTPUT_ROOT/logs/gce.exit_code` |
-| ce | `lumina_ce` | `mb_ce_2g_b8_a2.yaml` | `$OUTPUT_ROOT/logs/ce.log` | `$OUTPUT_ROOT/logs/ce.exit_code` |
+| Objective | tmux session | Config | Log | Exit code | Quality |
+| --- | --- | --- | --- | --- | --- |
+| attention | `lumina_attn` | `mb_attention_8g_b4_a1.yaml` | `$OUTPUT_ROOT/logs/attention.log` | `$OUTPUT_ROOT/logs/attention.exit_code` | `$OUTPUT_ROOT/MB-ATTN-8G-B4-A1-S42/quality_status.json` |
+| gce | `lumina_gce` | `mb_gce_8g_b4_a1.yaml` | `$OUTPUT_ROOT/logs/gce.log` | `$OUTPUT_ROOT/logs/gce.exit_code` | `$OUTPUT_ROOT/MB-GCE-8G-B4-A1-S42/quality_status.json` |
+| ce | `lumina_ce` | `mb_ce_8g_b4_a1.yaml` | `$OUTPUT_ROOT/logs/ce.log` | `$OUTPUT_ROOT/logs/ce.exit_code` | `$OUTPUT_ROOT/MB-CE-8G-B4-A1-S42/quality_status.json` |
 
 状态、日志和可选 attach：
 
@@ -255,30 +268,30 @@ tmux attach -t lumina_ce
 
 启动前会检查 tmux、环境变量、模型 `config.json`/`vqvae`、可创建 `OUTPUT_ROOT`、存在且为 8807 行的 manifest、目标 YAML、`CUDA_VISIBLE_DEVICES`；GCE 还检查 `GCE_CLUSTER_PATH`。同一 session 存在时会报 `session already exists`；任一另一个 Lumina session 存在时会报 `another Lumina training session is already active`。不会创建 `-2` 等替代 session。
 
-每次启动写入 `$OUTPUT_ROOT/logs/<objective>.command.sh`（owner-only）。launcher 显式 export snapshot，写入 date、hostname、pwd、Git SHA、GPU、资产路径和 config；stdout/stderr 写入 objective log。它用 `set -o pipefail` 和 `${PIPESTATUS[0]}` 记录真实 Python/torchrun exit code，而不是 `tee` 的返回值。
+每次启动写入 `$OUTPUT_ROOT/logs/<objective>.command.sh`（owner-only）。launcher 显式 export snapshot，写入 date、hostname、pwd、Git SHA、GPU、资产路径和 config；stdout/stderr 写入 objective log。它用 `set -o pipefail` 和 `${PIPESTATUS[0]}` 记录真实 Python/torchrun exit code，而不是 `tee` 的返回值。串行队列只有在该 objective 的进程退出码为 0 且 quality 状态为 `SUCCEEDED` 时才继续；`QUALITY_FAILED` 或 `PROCESS_FAILED` 都会停止队列。
 
 ## 5. 曲线与比较
 
 ```bash
 uv run python scripts/eval/plot_training_curves.py \
-  --input "$OUTPUT_ROOT/MB-ATTN-2G-B8-A2-S42/train_metrics.jsonl" \
+  --input "$OUTPUT_ROOT/MB-ATTN-8G-B4-A1-S42/train_metrics.jsonl" \
   --objective attention --steps-per-epoch 275 --smooth-window 25 \
-  --output "$OUTPUT_ROOT/MB-ATTN-2G-B8-A2-S42/curves"
+  --output "$OUTPUT_ROOT/MB-ATTN-8G-B4-A1-S42/curves"
 
 uv run python scripts/eval/plot_training_curves.py \
-  --input "$OUTPUT_ROOT/MB-GCE-2G-B8-A2-S42/train_metrics.jsonl" \
+  --input "$OUTPUT_ROOT/MB-GCE-8G-B4-A1-S42/train_metrics.jsonl" \
   --objective gce --steps-per-epoch 275 --smooth-window 25 \
-  --output "$OUTPUT_ROOT/MB-GCE-2G-B8-A2-S42/curves"
+  --output "$OUTPUT_ROOT/MB-GCE-8G-B4-A1-S42/curves"
 
 uv run python scripts/eval/plot_training_curves.py \
-  --input "$OUTPUT_ROOT/MB-CE-2G-B8-A2-S42/train_metrics.jsonl" \
+  --input "$OUTPUT_ROOT/MB-CE-8G-B4-A1-S42/train_metrics.jsonl" \
   --objective ce --steps-per-epoch 275 --smooth-window 25 \
-  --output "$OUTPUT_ROOT/MB-CE-2G-B8-A2-S42/curves"
+  --output "$OUTPUT_ROOT/MB-CE-8G-B4-A1-S42/curves"
 
 uv run python scripts/eval/plot_training_curves.py compare \
-  --ce "$OUTPUT_ROOT/MB-CE-2G-B8-A2-S42/train_metrics.jsonl" \
-  --attention "$OUTPUT_ROOT/MB-ATTN-2G-B8-A2-S42/train_metrics.jsonl" \
-  --gce "$OUTPUT_ROOT/MB-GCE-2G-B8-A2-S42/train_metrics.jsonl" \
+  --ce "$OUTPUT_ROOT/MB-CE-8G-B4-A1-S42/train_metrics.jsonl" \
+  --attention "$OUTPUT_ROOT/MB-ATTN-8G-B4-A1-S42/train_metrics.jsonl" \
+  --gce "$OUTPUT_ROOT/MB-GCE-8G-B4-A1-S42/train_metrics.jsonl" \
   --steps-per-epoch 275 --smooth-window 25 --output "$OUTPUT_ROOT/comparison"
 ```
 
@@ -289,14 +302,14 @@ uv run python scripts/eval/plot_training_curves.py compare \
 ```bash
 git rev-parse HEAD > "$OUTPUT_ROOT/git_commit.txt"
 git status --short > "$OUTPUT_ROOT/git_status.txt"
-mkdir -p "$OUTPUT_ROOT/configs_used"
-cp configs/train/ablation/mb_{ce,attention,gce}_2g_b8_a2.yaml "$OUTPUT_ROOT/configs_used/"
+mkdir -p "$OUTPUT_ROOT/configs_used" "$EXPERIMENT_ROOT/archives"
+cp configs/train/ablation/mb_{ce,attention,gce}_8g_b4_a1.yaml "$OUTPUT_ROOT/configs_used/"
 wc -l "$MAGICBRUSH_DATA_CONFIG" > "$OUTPUT_ROOT/dataset_count.txt"
 readlink -f "$MAGICBRUSH_DATA_CONFIG" > "$OUTPUT_ROOT/dataset_manifest_path.txt"
 readlink -f "$MODEL_PATH" > "$OUTPUT_ROOT/model_path.txt"
 cd "$(dirname "$OUTPUT_ROOT")"
 tar --exclude='checkpoint*' --exclude='*.pt' --exclude='*.pth' --exclude='*.safetensors' \
-  -czf lumina_objective_ablation_v1_results.tar.gz "$(basename "$OUTPUT_ROOT")"
+  -czf "$EXPERIMENT_ROOT/archives/$(basename "$OUTPUT_ROOT")_results.tar.gz" "$(basename "$OUTPUT_ROOT")"
 ```
 
 轻量包包含 configs、metrics、曲线、比较图、Git 信息、dataset/model path 与 logs/exit codes；不包含 checkpoint、权重或数据资产。

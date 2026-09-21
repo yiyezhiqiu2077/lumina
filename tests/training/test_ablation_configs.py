@@ -10,7 +10,7 @@ from training.config import load_train_config
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 CONFIG_ROOT = REPOSITORY / "configs/train/ablation"
-CONFIG_NAMES = ("mb_ce_2g_b8_a2.yaml", "mb_attention_2g_b8_a2.yaml", "mb_gce_2g_b8_a2.yaml")
+CONFIG_NAMES = ("mb_ce_8g_b4_a1.yaml", "mb_attention_8g_b4_a1.yaml", "mb_gce_8g_b4_a1.yaml")
 
 
 @pytest.fixture(autouse=True)
@@ -36,16 +36,31 @@ def test_ablation_configs_have_identical_matched_common_fields():
 def test_ablation_configs_load_to_the_requested_effective_batch_and_schedule():
     for name in CONFIG_NAMES:
         args = load_train_config(CONFIG_ROOT / name)
-        assert (args.nproc_per_node, args.batch_size, args.gradient_accumulation, args.global_batch_size) == (2, 8, 2, 32)
+        assert (args.nproc_per_node, args.batch_size, args.gradient_accumulation, args.global_batch_size) == (8, 4, 1, 32)
         assert args.max_seq_len == 5120
         assert args.max_steps == 2750
+        assert args.scheduler_horizon_steps == 2750
         assert args.save_steps == 275
-        assert args.learning_rate == pytest.approx(1e-5)
+        assert args.learning_rate == pytest.approx(3e-6)
         assert args.warmup_steps == 20
         assert args.lora_rank == 16
         assert args.lora_alpha == pytest.approx(16.0)
         assert args.lora_dropout == pytest.approx(0.05)
+        assert args.lora_targets == ("q_proj", "k_proj", "v_proj", "attn_out")
+        assert args.optimizer_betas == pytest.approx((0.9, 0.95))
+        assert args.loss_reduction == "sample_mean"
+        assert args.z_loss_weight == pytest.approx(1e-5)
+        assert args.quality_gate_enabled
         assert args.precision == "bf16"
+
+
+def test_ablation_configs_preserve_ten_epochs_at_eight_gpus():
+    dataset_size = 8807
+    samples_per_rank = dataset_size // 8
+    microbatches_per_rank = samples_per_rank // 4
+    assert samples_per_rank * 8 == 8800
+    assert microbatches_per_rank == 275
+    assert microbatches_per_rank * 10 == 2750
 
 
 def test_ablation_objective_specific_sections_are_explicit_and_isolated():

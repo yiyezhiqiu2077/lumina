@@ -720,6 +720,7 @@ class LLaDABlock(nn.Module):
         # present = (k, v) if use_cache else None
         # query_len, key_len = q.shape[-2], k.shape[-2]  # could be different if layer_past not None
 
+        semantic_q, semantic_k = q, k
         if self.config.rope:
             to_compute_index = to_compute_mask.nonzero(as_tuple=True)[1] if self.use_cache and to_compute_mask is not None else None
             q, k = self.rotary_emb(q, k, q_mask=to_compute_index)
@@ -728,9 +729,12 @@ class LLaDABlock(nn.Module):
         if instruction_token_mask is not None:
             if source_spatial_mask is None or source_edit_mask is None or attention_active is None:
                 raise ValueError("all attention-supervision masks must be provided together")
+            # The auxiliary learns semantic instruction/source alignment. RoPE is
+            # still applied to Q/K used by self-attention, but relative-position
+            # phase must not become an unintended localization target.
             auxiliary = layer_attention_auxiliary(
-                q,
-                k,
+                semantic_q,
+                semantic_k,
                 instruction_token_mask,
                 source_spatial_mask,
                 source_edit_mask,

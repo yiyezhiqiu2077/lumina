@@ -31,13 +31,19 @@ def run_model_for_objective(
     objective: str,
     input_ids,
     labels,
+    loss_reduction: str = "sample_mean",
     attention_layers: tuple[int, ...] | list[int] = (),
     attention_masks: Optional[dict[str, Any]] = None,
     gce_objective=None,
 ) -> ObjectiveForwardResult:
     """Run exactly the model/objective work allowed by one objective mode."""
     validate_objective(objective)
-    common = {"input_ids": input_ids, "labels": labels, "return_training_output": True}
+    common = {
+        "input_ids": input_ids,
+        "labels": labels,
+        "return_training_output": True,
+        "loss_reduction": loss_reduction,
+    }
     if objective == "ce":
         return ObjectiveForwardResult(output=model(**common))
     if objective == "attention":
@@ -54,7 +60,11 @@ def run_model_for_objective(
     if gce_objective is None:
         raise ValueError("gce objective requires a configured GCE objective")
     output = model(**common)
-    gce_loss, gce_metrics = gce_objective(output.logits, output.labels)
+    gce_loss, gce_metrics = gce_objective(
+        output.logits,
+        output.labels,
+        reduction=loss_reduction,
+    )
     return ObjectiveForwardResult(output=output, gce_loss=gce_loss, gce_metrics=gce_metrics)
 
 
@@ -62,19 +72,26 @@ def compose_total_loss(
     objective: str,
     generation_loss: torch.Tensor,
     *,
+    generation_z_loss: Optional[torch.Tensor] = None,
+    z_loss_weight: float = 0.0,
     attention_loss: Optional[torch.Tensor] = None,
     attention_weight: float = 0.1,
     gce_loss: Optional[torch.Tensor] = None,
     gce_weight: float = 1.0,
 ) -> torch.Tensor:
-    """Combine only the loss term permitted by the selected objective."""
+    """Combine the shared generation terms and only the selected auxiliary."""
     validate_objective(objective)
+    total = generation_loss
+    if z_loss_weight:
+        if generation_z_loss is None:
+            raise ValueError("nonzero z_loss_weight requires generation_z_loss")
+        total = total + z_loss_weight * generation_z_loss
     if objective == "ce":
-        return generation_loss
+        return total
     if objective == "attention":
         if attention_loss is None:
             raise ValueError("attention objective requires attention_loss")
-        return generation_loss + attention_weight * attention_loss
+        return total + attention_weight * attention_loss
     if gce_loss is None:
         raise ValueError("gce objective requires gce_loss")
-    return generation_loss + gce_weight * gce_loss
+    return total + gce_weight * gce_loss

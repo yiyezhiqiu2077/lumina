@@ -68,7 +68,10 @@ def rolling_mean(values: Iterable[float], window: int) -> np.ndarray:
     if values.size == 0:
         raise ValueError("cannot smooth an empty curve")
     width = min(window, values.size)
-    return np.convolve(values, np.ones(width, dtype=float) / width, mode="same")
+    kernel = np.ones(width, dtype=float)
+    totals = np.convolve(values, kernel, mode="same")
+    counts = np.convolve(np.ones_like(values), kernel, mode="same")
+    return totals / counts
 
 
 def metric_values(records: list[dict], key: str) -> tuple[np.ndarray, np.ndarray]:
