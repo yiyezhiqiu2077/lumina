@@ -150,4 +150,3 @@ uv run python scripts/inference/t2i_ddp.py --help
 uv run pytest -q
 ```
 
-多节点启动、FP8、FSDP 和 FlashAttention 性能优化不属于当前 main 的承诺范围。
