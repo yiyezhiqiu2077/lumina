@@ -60,6 +60,10 @@ def validate_train_config(args: argparse.Namespace) -> None:
         raise ValueError("gradient decomposition cadence cannot be negative")
     if getattr(args, "z_loss_weight", 0.0) < 0:
         raise ValueError("z_loss_weight cannot be negative")
+    if getattr(args, "attention_qk_stage", "post_rope") not in ("pre_rope", "post_rope"):
+        raise ValueError("attention_qk_stage must be pre_rope or post_rope")
+    if getattr(args, "attention_loss_mode", "normalized_mask_ce") not in ("normalized_mask_ce", "region_mass"):
+        raise ValueError("attention_loss_mode must be normalized_mask_ce or region_mass")
     scheduler_horizon_steps = getattr(args, "scheduler_horizon_steps", args.max_steps)
     if scheduler_horizon_steps < args.max_steps:
         raise ValueError(
@@ -140,7 +144,8 @@ def load_train_config(config_path: Path, resume_from_checkpoint: Path | None = N
         quality_max_update_ratio=float(quality_gate.get("max_update_ratio", 0.25)),
         condition_dropout=config.get("condition_dropout", 0.1), max_seq_len=config["data"]["max_seq_len"],
         seed=config["seed"], num_workers=config.get("num_workers", 4), resume_from_checkpoint=resume_from_checkpoint,
-        attention_layers=[], attention_loss_weight=0.1, gce_clusters=None, gce_weight=1.0, gce_levels=[1024, 512],
+        attention_layers=[], attention_loss_weight=0.1, attention_qk_stage="post_rope",
+        attention_loss_mode="normalized_mask_ce", gce_clusters=None, gce_weight=1.0, gce_levels=[1024, 512],
         nproc_per_node=int(distributed["nproc_per_node"]),
         global_batch_size=int(distributed["global_batch_size"]),
         launcher=runtime_config["launcher"], rdzv=runtime_config["rdzv"], precision=runtime_config["precision"],
@@ -149,6 +154,8 @@ def load_train_config(config_path: Path, resume_from_checkpoint: Path | None = N
     if objective == "attention":
         values["attention_layers"] = config["attention_loss"]["layers"]
         values["attention_loss_weight"] = config["attention_loss"]["weight"]
+        values["attention_qk_stage"] = config["attention_loss"].get("qk_stage", "post_rope")
+        values["attention_loss_mode"] = config["attention_loss"].get("mode", "normalized_mask_ce")
     if objective == "gce":
         gce = config["gce"]
         values["gce_clusters"] = Path(_required_env(gce["cluster_path_env"]))

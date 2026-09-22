@@ -122,6 +122,7 @@ def gradient_decomposition(
     return {
         "generation_gradient_norm": generation_norm,
         "auxiliary_gradient_norm": auxiliary_norm,
+        "auxiliary_to_generation_gradient_ratio": auxiliary_norm / generation_norm.clamp_min(1e-12),
         "gradient_cosine": cosine,
     }
 
@@ -438,8 +439,11 @@ def run(args):
             conditional_localization_mass=torch.zeros((), device=device),
             attention_entropy=torch.zeros((), device=device),
             actual_full_attention_edit_mask_mass=torch.zeros((), device=device),
+            enrichment=torch.zeros((), device=device),
+            mask_entropy=torch.zeros((), device=device),
+            effective_KL=torch.zeros((), device=device),
         )
-        layer_sums = torch.zeros(len(args.attention_layers), 5, device=device)
+        layer_sums = torch.zeros(len(args.attention_layers), 8, device=device)
     else:
         layer_sums = None
     if args.objective == "gce":
@@ -495,6 +499,8 @@ def run(args):
                         labels=labels,
                         loss_reduction=args.loss_reduction,
                         attention_layers=args.attention_layers,
+                        attention_qk_stage=args.attention_qk_stage,
+                        attention_loss_mode=args.attention_loss_mode,
                         attention_masks=attention_masks,
                         gce_objective=gce_objective,
                     )
@@ -568,8 +574,12 @@ def run(args):
                     sums["conditional_localization_mass"] += attention_metrics[1]
                     sums["attention_entropy"] += attention_metrics[2]
                     sums["actual_full_attention_edit_mask_mass"] += attention_metrics[3]
+                    sums["enrichment"] += attention_metrics[5]
+                    sums["mask_entropy"] += attention_metrics[6]
+                    sums["effective_KL"] += attention_metrics[7]
                     values = result.attention_auxiliary.detach().float()
                     layer_sums[:, :4] += values[:, :4] * values[:, 4:5]
+                    layer_sums[:, 5:] += values[:, 5:] * values[:, 4:5]
                     layer_sums[:, 4] += values[:, 4]
                 elif args.objective == "gce":
                     sums["gce_loss"] += result.gce_loss.detach().float()
@@ -636,6 +646,7 @@ def run(args):
                     layers = layer_sums.clone()
                     dist.all_reduce(layers)
                     layers[:, :4] /= layers[:, 4:5].clamp_min(1.0)
+                    layers[:, 5:] /= layers[:, 4:5].clamp_min(1.0)
                     layer_sums.zero_()
                 else:
                     layers = None
@@ -724,6 +735,16 @@ def run(args):
                             attn_to_gen_ratio=args.attention_loss_weight
                             * metrics["L_attn_raw"].item()
                             / max(metrics["L_gen"].item(), 1e-8),
+                            P_G=metrics["conditional_localization_mass"].item(),
+                            enrichment=metrics["enrichment"].item(),
+                            mask_entropy=metrics["mask_entropy"].item(),
+                            effective_KL=(
+                                metrics["effective_KL"].item()
+                                if args.attention_loss_mode == "normalized_mask_ce"
+                                else None
+                            ),
+                            attention_qk_stage=args.attention_qk_stage,
+                            attention_loss_mode=args.attention_loss_mode,
                             per_layer={
                                 str(layer): {
                                     "conditional_spatial_ce": layers[index, 0].item(),
@@ -731,6 +752,13 @@ def run(args):
                                     "attention_entropy": layers[index, 2].item(),
                                     "actual_full_attention_edit_mask_mass": layers[index, 3].item(),
                                     "active_sample_count": int(layers[index, 4].item()),
+                                    "enrichment": layers[index, 5].item(),
+                                    "mask_entropy": layers[index, 6].item(),
+                                    "effective_KL": (
+                                        layers[index, 7].item()
+                                        if args.attention_loss_mode == "normalized_mask_ce"
+                                        else None
+                                    ),
                                 }
                                 for index, layer in enumerate(args.attention_layers)
                             },

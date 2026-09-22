@@ -695,6 +695,8 @@ class LLaDABlock(nn.Module):
         source_spatial_mask: Optional[torch.Tensor] = None,
         source_edit_mask: Optional[torch.Tensor] = None,
         attention_active: Optional[torch.Tensor] = None,
+        attention_qk_stage: str = "post_rope",
+        attention_loss_mode: str = "normalized_mask_ce",
     ):
         B, T, C = q.size()  # batch size, sequence length, d_model
         dtype = k.dtype
@@ -729,16 +731,16 @@ class LLaDABlock(nn.Module):
         if instruction_token_mask is not None:
             if source_spatial_mask is None or source_edit_mask is None or attention_active is None:
                 raise ValueError("all attention-supervision masks must be provided together")
-            # The auxiliary learns semantic instruction/source alignment. RoPE is
-            # still applied to Q/K used by self-attention, but relative-position
-            # phase must not become an unintended localization target.
+            if attention_qk_stage not in {"pre_rope", "post_rope"}:
+                raise ValueError(f"unsupported attention Q/K stage: {attention_qk_stage}")
             auxiliary = layer_attention_auxiliary(
-                semantic_q,
-                semantic_k,
+                q if attention_qk_stage == "post_rope" else semantic_q,
+                k if attention_qk_stage == "post_rope" else semantic_k,
                 instruction_token_mask,
                 source_spatial_mask,
                 source_edit_mask,
                 attention_active,
+                mode=attention_loss_mode,
             )
 
         if attention_bias is not None and attention_bias.dtype != torch.bool:
@@ -942,6 +944,8 @@ class LLaDALlamaBlock(LLaDABlock):
         source_spatial_mask: Optional[torch.Tensor] = None,
         source_edit_mask: Optional[torch.Tensor] = None,
         attention_active: Optional[torch.Tensor] = None,
+        attention_qk_stage: str = "post_rope",
+        attention_loss_mode: str = "normalized_mask_ce",
     ):
         # Get query, key, value projections.
         # shape:
@@ -978,6 +982,8 @@ class LLaDALlamaBlock(LLaDABlock):
             source_spatial_mask=source_spatial_mask,
             source_edit_mask=source_edit_mask,
             attention_active=attention_active,
+            attention_qk_stage=attention_qk_stage,
+            attention_loss_mode=attention_loss_mode,
         )
         if self._activation_checkpoint_fn is not None:
             attention_result = self._activation_checkpoint_fn(  # type: ignore
@@ -1261,6 +1267,8 @@ class LLaDAModel(nn.Module):
         source_spatial_mask: Optional[torch.Tensor] = None,
         source_edit_mask: Optional[torch.Tensor] = None,
         attention_active: Optional[torch.Tensor] = None,
+        attention_qk_stage: str = "post_rope",
+        attention_loss_mode: str = "normalized_mask_ce",
     ) -> LLaDAOutput:
         """
         :param input_ids: A tensor of shape `(batch_size, seq_len)`.
@@ -1416,6 +1424,8 @@ class LLaDAModel(nn.Module):
                         source_spatial_mask=source_spatial_mask if block_idx in selected_attention_layers else None,
                         source_edit_mask=source_edit_mask if block_idx in selected_attention_layers else None,
                         attention_active=attention_active if block_idx in selected_attention_layers else None,
+                        attention_qk_stage=attention_qk_stage,
+                        attention_loss_mode=attention_loss_mode,
                     )
                 else:
                     # shape: (batch_size, seq_len, d_model)
@@ -1427,6 +1437,8 @@ class LLaDAModel(nn.Module):
                         source_spatial_mask=source_spatial_mask if block_idx in selected_attention_layers else None,
                         source_edit_mask=source_edit_mask if block_idx in selected_attention_layers else None,
                         attention_active=attention_active if block_idx in selected_attention_layers else None,
+                        attention_qk_stage=attention_qk_stage,
+                        attention_loss_mode=attention_loss_mode,
                     )
                 if block_idx in selected_attention_layers:
                     x, _, auxiliary = block_result
@@ -1556,6 +1568,8 @@ class LLaDAModelLM(PreTrainedModel):
         source_spatial_mask: Optional[torch.Tensor] = None,
         source_edit_mask: Optional[torch.Tensor] = None,
         attention_active: Optional[torch.Tensor] = None,
+        attention_qk_stage: str = "post_rope",
+        attention_loss_mode: str = "normalized_mask_ce",
         return_attention_auxiliary: bool = False,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         if output_attentions:
@@ -1579,6 +1593,8 @@ class LLaDAModelLM(PreTrainedModel):
             source_spatial_mask=source_spatial_mask,
             source_edit_mask=source_edit_mask,
             attention_active=attention_active,
+            attention_qk_stage=attention_qk_stage,
+            attention_loss_mode=attention_loss_mode,
         )
 
         logits = outputs.logits

@@ -33,6 +33,8 @@ def run_model_for_objective(
     labels,
     loss_reduction: str = "sample_mean",
     attention_layers: tuple[int, ...] | list[int] = (),
+    attention_qk_stage: str = "post_rope",
+    attention_loss_mode: str = "normalized_mask_ce",
     attention_masks: Optional[dict[str, Any]] = None,
     gce_objective=None,
 ) -> ObjectiveForwardResult:
@@ -52,6 +54,8 @@ def run_model_for_objective(
         output = model(
             **common,
             attention_supervision_layers=list(attention_layers),
+            attention_qk_stage=attention_qk_stage,
+            attention_loss_mode=attention_loss_mode,
             **attention_masks,
         )
         if output.attention_auxiliary is None:

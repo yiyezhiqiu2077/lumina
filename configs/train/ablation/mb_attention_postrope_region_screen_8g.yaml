@@ -1,5 +1,5 @@
-experiment_name: MB-ATTN-8G-B4-A1-S42
-output_name: MB-ATTN-8G-B4-A1-S42
+experiment_name: MB-ATTN-POSTROPE-REGION-SCREEN-8G-S42
+output_name: MB-ATTN-POSTROPE-REGION-SCREEN-8G-S42
 objective:
   mode: attention
 seed: 42
@@ -19,7 +19,8 @@ training:
   precision: bf16
   batch_size_per_gpu: 4
   gradient_accumulation: 1
-  max_optimizer_steps: 2750
+  max_optimizer_steps: 275
+  scheduler_horizon_steps: 2750
   checkpoint_every_steps: 275
 optimization:
   optimizer: AdamW
@@ -37,11 +38,11 @@ lora:
   targets: [q_proj, k_proj, v_proj, attn_out]
 diagnostics:
   every_steps: 25
-  gradient_decomposition_every_steps: 100
+  gradient_decomposition_every_steps: 25
 quality_gate:
   enabled: true
   baseline_start: 101
-  baseline_end: 400
+  baseline_end: 275
   window_size: 50
   max_loss_ratio: 1.75
   consecutive_windows: 2
@@ -54,8 +55,8 @@ distributed:
 attention_loss:
   weight: 0.1
   qk_stage: post_rope
-  mode: normalized_mask_ce
+  mode: region_mass
   layers: [24, 25, 26, 27]
   query: real_instruction_tokens
   keys: clean_source_image_spatial_tokens
-  target: normalized_gt_edit_mask_cross_entropy
+  target: gt_edit_region_mass

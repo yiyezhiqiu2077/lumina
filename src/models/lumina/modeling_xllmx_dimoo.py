@@ -86,6 +86,8 @@ class LLaDAForMultiModalGeneration(LLaDAModelLM):
         source_spatial_mask = kwargs.pop("source_spatial_mask", None)
         source_edit_mask = kwargs.pop("source_edit_mask", None)
         attention_active = kwargs.pop("attention_active", None)
+        attention_qk_stage = kwargs.pop("attention_qk_stage", "post_rope")
+        attention_loss_mode = kwargs.pop("attention_loss_mode", "normalized_mask_ce")
         return_attention_auxiliary = bool(attention_supervision_layers)
         if infer:
             input_ids = input_ids.tolist()
@@ -125,6 +127,8 @@ class LLaDAForMultiModalGeneration(LLaDAModelLM):
             source_spatial_mask=source_spatial_mask,
             source_edit_mask=source_edit_mask,
             attention_active=attention_active,
+            attention_qk_stage=attention_qk_stage,
+            attention_loss_mode=attention_loss_mode,
             return_attention_auxiliary=return_attention_auxiliary,
         )
         if return_attention_auxiliary:
