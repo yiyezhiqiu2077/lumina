@@ -224,11 +224,19 @@ def _global_attention_loss(auxiliary_by_layer: torch.Tensor, world_size: int):
     local_active = auxiliary[4].detach()
     global_active = local_active.clone()
     dist.all_reduce(global_active)
-    global_metrics = auxiliary[:4].detach().float() * local_active.float()
+    # Keep the complete auxiliary layout for logging.  Entries 0--3 and 5--7
+    # are per-active-sample means, while entry 4 is the active-sample count.
+    # Reducing only the first four entries makes the later enrichment / entropy
+    # logging index an invalid four-element tensor.
+    global_metrics = auxiliary.detach().float().clone()
+    global_metrics[:4] *= local_active.float()
+    global_metrics[5:] *= local_active.float()
     dist.all_reduce(global_metrics)
     if global_active.item() > 0:
         backward_loss = auxiliary[0] * local_active * world_size / global_active
-        global_metrics /= global_active
+        global_metrics[:4] /= global_active
+        global_metrics[5:] /= global_active
+        global_metrics[4] = global_active
     else:
         backward_loss = auxiliary[0] * 0.0
         global_metrics.zero_()
