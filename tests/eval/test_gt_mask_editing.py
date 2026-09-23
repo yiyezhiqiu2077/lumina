@@ -63,6 +63,15 @@ def test_token_accuracy_and_hard_lock_assertion():
         token_accuracies(torch.tensor([[126361, 126399, 126359, 126362]]), source, target, mask)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="GPU-only evaluator boundary")
+def test_token_accuracy_accepts_cuda_generated_tokens_and_cpu_payload():
+    source = torch.tensor([[1, 2], [3, 4]])
+    target = torch.tensor([[5, 2], [3, 6]])
+    mask = torch.tensor([[True, False], [False, True]])
+    generated = torch.tensor([[126361, 126358, 126359, 126362]], device="cuda")
+    assert token_accuracies(generated, source, target, mask)["outside_token_accuracy"] == 1.0
+
+
 def test_masked_pixel_metrics_and_empty_full_masks_do_not_crash():
     prediction = np.zeros((4, 4, 3), dtype=np.float32)
     target = np.ones_like(prediction)

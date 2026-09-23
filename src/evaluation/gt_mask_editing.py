@@ -113,7 +113,9 @@ def token_accuracies(
     *,
     image_token_offset: int = IMAGE_TOKEN_OFFSET,
 ) -> dict[str, float]:
-    generated = generated_with_offset.reshape(-1).long() - image_token_offset
+    # Sampling returns CUDA tokens, whereas a persisted token payload is read
+    # on CPU.  Accuracy is a diagnostic scalar, so compare on CPU explicitly.
+    generated = generated_with_offset.reshape(-1).long().cpu() - image_token_offset
     source = source_codes.reshape(-1).long()
     target = target_codes.reshape(-1).long()
     mask = edit_mask.reshape(-1).bool()
