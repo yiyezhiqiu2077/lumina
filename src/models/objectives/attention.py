@@ -103,7 +103,7 @@ def layer_attention_auxiliary(
         if mode == "normalized_mask_ce":
             losses.append(normalized_ce)
         else:
-            losses.append(-(probability_mass + eps).log())
+            losses.append(-probability_mass.clamp_min(eps).log())
         conditional_masses.append(probability_mass)
         entropies.append(-(probability * probability.log()).sum())
         mask_entropy = mask_count.log()
