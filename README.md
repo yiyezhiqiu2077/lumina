@@ -43,6 +43,36 @@ export OUTPUT_ROOT="$EXPERIMENT_ROOT/formal/lumina_objective_ablation_8g_v3_lr3e
 `official_tokens/train/manifest.jsonl`；模型权重、MagicBrush 数据、GCE cluster、日志和
 checkpoint 均不在 Git 中。
 
+### MagicBrush + RefEdit 混合训练（新实验）
+
+新实验统一通过 Git 忽略的 `local_assets/` 访问机器本地资产；真实路径不写入配置或 Git。
+先由用户明确传入已有目录创建软链：
+
+```bash
+bash scripts/setup_local_assets.sh model /path/to/Lumina-DiMOO
+bash scripts/setup_local_assets.sh magicbrush /path/to/magicbrush-token-root
+bash scripts/setup_local_assets.sh refedit /path/to/refedit-final-mask
+bash scripts/setup_local_assets.sh mixed /path/to/mixed-token-root
+```
+
+RefEdit 必须先经官方 parquet 的严格 `(source_relative_path, row_idx)`、`raw.img_id == audit.img_id`、
+instruction、图像尺寸与 mask 检查，再写入与 MagicBrush 相同的 token payload：
+
+```bash
+python scripts/data/preprocess_refedit.py audit \
+  --raw-root local_assets/datasets/refedit --output /path/to/refedit-tokens
+python scripts/data/preprocess_refedit.py tokenize \
+  --raw-root local_assets/datasets/refedit --model local_assets/models/Lumina-DiMOO \
+  --output /path/to/refedit-tokens
+python scripts/data/build_mixed_edit_manifest.py \
+  --magicbrush-manifest local_assets/datasets/magicbrush/official_tokens/train/manifest.jsonl \
+  --refedit-manifest /path/to/refedit-tokens/manifest.jsonl --output /path/to/mixed
+```
+
+`configs/train/validation/mixed_*.yaml` 是当前 4-GPU、20 optimizer-step 的正确性 smoke；
+`configs/train/formal/mixed_*.yaml` 仅为之后 8-GPU 正式实验准备，按 mixed manifest 的实际行数
+自动计算每 epoch、10 epoch、scheduler horizon 与每 epoch checkpoint，当前机器不得运行正式配置。
+
 推荐将本项目的实验结果统一放在一个项目目录下，例如 `experiments/lumina/`，并按
 `formal/`、`probes/`、`smokes/`、`archives/` 分层保存。`OUTPUT_ROOT` 应始终指向某一次
 单独运行的根目录，而不是共享父目录。

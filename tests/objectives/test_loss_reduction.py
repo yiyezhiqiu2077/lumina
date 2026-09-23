@@ -40,6 +40,20 @@ def test_generation_ce_and_z_loss_match_explicit_per_sample_reduction():
     assert torch.isfinite(logits.grad).all()
 
 
+def test_token_mean_matches_flattened_cross_entropy_and_z_loss():
+    logits = torch.tensor(
+        [[[2.0, 0.0], [0.0, 0.0]], [[0.0, 2.0], [0.0, 2.0]]],
+        requires_grad=True,
+    )
+    labels = torch.tensor([[0, -100], [0, 0]])
+    ce, z_loss, count, _ = generation_ce_and_z_loss(logits, labels, "token_mean")
+    valid_logits = logits[labels != -100].float()
+    valid_labels = labels[labels != -100]
+    assert torch.allclose(ce, F.cross_entropy(valid_logits, valid_labels))
+    assert torch.allclose(z_loss, torch.logsumexp(valid_logits, dim=-1).square().mean())
+    assert count.item() == 3
+
+
 def test_empty_supervision_is_finite_and_differentiable():
     logits = torch.randn(2, 3, 5, requires_grad=True)
     labels = torch.full((2, 3), -100)

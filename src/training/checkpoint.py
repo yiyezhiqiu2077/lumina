@@ -16,6 +16,7 @@ from training.lora import load_lora_state_dict, lora_state_dict
 
 _FINGERPRINT_SOURCES = (
     "src/dataset/magicbrush.py",
+    "src/dataset/refedit.py",
     "src/training/checkpoint.py",
     "src/training/config.py",
     "src/training/distributed.py",
@@ -50,6 +51,17 @@ def _file_identity(path: Path, *, include_path: bool = True) -> dict[str, Any]:
     return identity
 
 
+def _manifest_composition(path: Path) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            dataset_name = json.loads(line).get("dataset_name", "magicbrush")
+            counts[str(dataset_name)] = counts.get(str(dataset_name), 0) + 1
+    return dict(sorted(counts.items()))
+
+
 def build_run_fingerprint(args, world_size: int) -> dict[str, Any]:
     """Build the immutable recipe identity required for safe resume."""
     repository = Path(__file__).resolve().parents[2]
@@ -58,7 +70,7 @@ def build_run_fingerprint(args, world_size: int) -> dict[str, Any]:
         for relative in _FINGERPRINT_SOURCES
     }
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "objective": args.objective,
         "world_size": world_size,
         "effective_batch": args.batch_size * args.gradient_accumulation * world_size,
@@ -115,6 +127,8 @@ def build_run_fingerprint(args, world_size: int) -> dict[str, Any]:
             "z_loss_weight": args.z_loss_weight,
             "attention_weight": args.attention_loss_weight,
             "attention_layers": list(args.attention_layers),
+            "attention_qk_stage": getattr(args, "attention_qk_stage", "pre_rope"),
+            "attention_loss_mode": getattr(args, "attention_loss_mode", "normalized_mask_ce"),
             "gce_weight": args.gce_weight,
             "gce_levels": list(args.gce_levels),
         },
@@ -124,6 +138,8 @@ def build_run_fingerprint(args, world_size: int) -> dict[str, Any]:
             "max_seq_len": args.max_seq_len,
             "cursor_strategy": "global_step_times_gradient_accumulation",
             "sampler": "DistributedSampler(drop_last=True)",
+            "sample_count": getattr(args, "dataset_sample_count", None),
+            "composition": _manifest_composition(Path(args.train_manifest)),
         },
         "quality_gate": {
             "enabled": args.quality_gate_enabled,

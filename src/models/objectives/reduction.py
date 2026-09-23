@@ -2,9 +2,26 @@
 from __future__ import annotations
 
 import torch
+import torch.distributed as dist
 
 
 LOSS_REDUCTIONS = ("sample_mean", "token_mean")
+
+
+def _global_token_mean(local_sum: torch.Tensor, local_count: torch.Tensor) -> torch.Tensor:
+    """Return the true DDP-wide token mean with DDP's gradient averaging.
+
+    DDP averages parameter gradients across ranks.  A plain local
+    ``local_sum / local_count`` therefore biases the objective whenever ranks
+    contain different numbers of valid target tokens.  The detached count is
+    globally summed and the local numerator is multiplied by world size so
+    that DDP's later gradient average exactly equals ``global_sum/global_n``.
+    """
+    if not (dist.is_available() and dist.is_initialized()):
+        return local_sum / local_count.clamp_min(1)
+    global_count = local_count.detach().clone()
+    dist.all_reduce(global_count)
+    return local_sum * dist.get_world_size() / global_count.clamp_min(1)
 
 
 def reduce_supervised_values(
@@ -24,10 +41,13 @@ def reduce_supervised_values(
             f"values and valid_mask must have the same shape, got {values.shape} and {valid_mask.shape}"
         )
     valid_mask = valid_mask.bool()
+    if reduction == "token_mean":
+        return _global_token_mean(
+            values[valid_mask].sum(),
+            valid_mask.sum(dtype=values.dtype),
+        )
     if not bool(valid_mask.any()):
         return values.sum() * 0.0
-    if reduction == "token_mean":
-        return values[valid_mask].mean()
     if values.ndim < 2:
         raise ValueError("sample_mean requires a batch dimension and at least one value dimension")
     flattened_values = values.reshape(values.shape[0], -1)

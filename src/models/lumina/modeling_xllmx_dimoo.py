@@ -42,18 +42,19 @@ def generation_ce_and_z_loss(
     valid = labels != -100
     valid_logits = logits[valid].float()
     valid_targets = labels[valid]
-    if not valid_targets.numel():
-        zero = logits.float().sum() * 0.0
-        return zero, zero, valid.sum(), zero.detach()
-    token_ce = F.cross_entropy(valid_logits, valid_targets, reduction="none")
-    token_z = torch.logsumexp(valid_logits, dim=-1).square()
-    per_position_ce = logits.new_zeros(labels.shape, dtype=torch.float32)
-    per_position_z = logits.new_zeros(labels.shape, dtype=torch.float32)
-    per_position_ce[valid] = token_ce
-    per_position_z[valid] = token_z
+    # Keep an autograd connection even when this rank has zero valid labels.
+    # That is required for token-mean DDP where another rank may be active.
+    per_position_ce = logits[..., 0].float() * 0.0
+    per_position_z = logits[..., 0].float() * 0.0
+    if valid_targets.numel():
+        token_ce = F.cross_entropy(valid_logits, valid_targets, reduction="none")
+        token_z = torch.logsumexp(valid_logits, dim=-1).square()
+        per_position_ce[valid] = token_ce
+        per_position_z[valid] = token_z
     ce = reduce_supervised_values(per_position_ce, valid, reduction)
     z_loss = reduce_supervised_values(per_position_z, valid, reduction)
-    return ce, z_loss, valid.sum(), valid_logits.detach().abs().max()
+    max_abs = valid_logits.detach().abs().max() if valid_targets.numel() else logits.new_zeros(())
+    return ce, z_loss, valid.sum(), max_abs
 
 
 def pad_batch_sequences(sequences, pad_value: int, max_tokens: int | None = None) -> list[list[int]]:

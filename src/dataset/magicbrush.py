@@ -63,7 +63,13 @@ def _masked_target(codes: torch.Tensor, rng: random.Random) -> tuple[list[int], 
     return tokens, labels, count
 
 
-class MagicBrushTokenDataset(Dataset):
+class EditTokenDataset(Dataset):
+    """One editing-token protocol shared by MagicBrush and RefEdit.
+
+    Old MagicBrush manifests store absolute ``token_file`` paths.  New,
+    portable manifests store paths relative to the manifest.  Resolving at
+    load time keeps both formats valid without duplicating sequence assembly.
+    """
     def __init__(
         self,
         manifest: Path,
@@ -74,7 +80,8 @@ class MagicBrushTokenDataset(Dataset):
         seed: int = 42,
         fixed_corruption: bool = False,
     ):
-        self.rows = read_jsonl(manifest)
+        self.manifest = Path(manifest).resolve()
+        self.rows = read_jsonl(self.manifest)
         self.tokenizer = tokenizer
         self.max_sequence_length = max_sequence_length
         self.condition_dropout = condition_dropout
@@ -95,9 +102,22 @@ class MagicBrushTokenDataset(Dataset):
         epoch = 0 if self.fixed_corruption else self.epoch
         return random.Random(stable_sample_seed(self.seed, epoch, sample_key))
 
+    def _token_file(self, row: dict) -> Path:
+        token_file = Path(row["token_file"])
+        return token_file if token_file.is_absolute() else self.manifest.parent / token_file
+
     def __getitem__(self, index: int) -> dict:
         row = self.rows[index]
-        payload = torch.load(row["token_file"], map_location="cpu", weights_only=True)
+        token_file = self._token_file(row)
+        if not token_file.is_file():
+            raise FileNotFoundError(
+                f"token file for {row.get('sample_key', index)!r} does not exist: {token_file}"
+            )
+        payload = torch.load(token_file, map_location="cpu", weights_only=True)
+        required_payload = {"source_codes", "target_codes", "edit_mask", "token_height", "token_width"}
+        missing_payload = required_payload.difference(payload)
+        if missing_payload:
+            raise ValueError(f"token payload {token_file} is missing keys: {sorted(missing_payload)}")
         rng = self._rng(str(row["sample_key"]))
         conditional = rng.random() >= self.condition_dropout
         instruction = row["instruction"] if conditional else "<uncondition>"
@@ -159,6 +179,7 @@ class MagicBrushTokenDataset(Dataset):
             "conditional": conditional,
             "empty_mask": not bool(payload["edit_mask"].any()),
             "sample_key": row["sample_key"],
+            "dataset_name": row.get("dataset_name", "magicbrush"),
             "instruction_token_count": sum(instruction_mask),
             "source_spatial_count": sum(source_spatial_mask),
             "source_newline_count": payload["token_height"] if conditional else 0,
@@ -169,3 +190,7 @@ class MagicBrushTokenDataset(Dataset):
             "token_height": payload["token_height"],
             "token_width": payload["token_width"],
         }
+
+
+# Kept as a public compatibility name for old configs, tools, and checkpoints.
+MagicBrushTokenDataset = EditTokenDataset

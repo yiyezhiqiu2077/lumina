@@ -31,6 +31,34 @@ def _resolve_repository_path(value: str | Path) -> Path:
     return path if path.is_absolute() else repository_root() / path
 
 
+def _manifest_sample_count(path: Path) -> int:
+    with path.open("r", encoding="utf-8") as handle:
+        return sum(1 for line in handle if line.strip())
+
+
+def _steps_per_epoch(sample_count: int, nproc_per_node: int, batch_size: int, accumulation: int) -> int:
+    # Mirrors DistributedSampler(drop_last=True) followed by DataLoader(drop_last=True).
+    microbatches = (sample_count // nproc_per_node) // batch_size
+    steps = microbatches // accumulation
+    if steps <= 0:
+        raise ValueError("mixed manifest is too small for one optimizer step per epoch")
+    return steps
+
+
+def _resolve_step_value(value, *, name: str, formal_steps: int, steps_per_epoch: int | None, default: int) -> int:
+    if value is None:
+        return default
+    if value == "auto" or value == "formal_auto":
+        return formal_steps
+    if value == "epoch_auto":
+        if steps_per_epoch is None:
+            raise ValueError(f"training.{name}=epoch_auto requires a manifest-derived epoch length")
+        return steps_per_epoch
+    if not isinstance(value, int):
+        raise ValueError(f"training.{name} must be an integer, auto, formal_auto, or epoch_auto")
+    return value
+
+
 def validate_train_config(args: argparse.Namespace) -> None:
     expected = args.nproc_per_node * args.batch_size * args.gradient_accumulation
     if expected != args.global_batch_size:
@@ -109,6 +137,46 @@ def load_train_config(config_path: Path, resume_from_checkpoint: Path | None = N
     diagnostics = config.get("diagnostics", {})
     quality_gate = config.get("quality_gate", {})
     distributed = config["distributed"]
+    nproc_per_node = int(distributed["nproc_per_node"])
+    batch_size = training["batch_size_per_gpu"]
+    accumulation = training["gradient_accumulation"]
+    epochs = int(training.get("epochs", 0))
+    raw_max_steps = training["max_optimizer_steps"]
+    raw_scheduler_horizon = training.get("scheduler_horizon_steps")
+    raw_save_steps = training.get("checkpoint_every_steps")
+    needs_manifest_count = any(
+        value in {"auto", "formal_auto", "epoch_auto"}
+        for value in (raw_max_steps, raw_scheduler_horizon, raw_save_steps)
+    )
+    sample_count = _manifest_sample_count(Path(manifest)) if needs_manifest_count else None
+    optimizer_steps_per_epoch = (
+        _steps_per_epoch(sample_count, nproc_per_node, batch_size, accumulation)
+        if sample_count is not None
+        else None
+    )
+    formal_steps = epochs * optimizer_steps_per_epoch if optimizer_steps_per_epoch is not None and epochs else None
+    if raw_max_steps == "auto":
+        if formal_steps is None:
+            raise ValueError("training.epochs is required when max_optimizer_steps=auto")
+        max_steps = formal_steps
+    elif isinstance(raw_max_steps, int):
+        max_steps = raw_max_steps
+    else:
+        raise ValueError("training.max_optimizer_steps must be an integer or auto")
+    scheduler_horizon = _resolve_step_value(
+        raw_scheduler_horizon,
+        name="scheduler_horizon_steps",
+        formal_steps=formal_steps if formal_steps is not None else max_steps,
+        steps_per_epoch=optimizer_steps_per_epoch,
+        default=max_steps,
+    )
+    save_steps = _resolve_step_value(
+        raw_save_steps,
+        name="checkpoint_every_steps",
+        formal_steps=formal_steps if formal_steps is not None else max_steps,
+        steps_per_epoch=optimizer_steps_per_epoch,
+        default=max_steps,
+    )
     values = dict(
         config_file=config_path,
         dataset_config_file=dataset_config_path,
@@ -117,13 +185,10 @@ def load_train_config(config_path: Path, resume_from_checkpoint: Path | None = N
         train_manifest=Path(manifest),
         output=Path(output_root) / config["output_name"],
         objective=objective,
-        max_steps=training["max_optimizer_steps"],
-        scheduler_horizon_steps=training.get(
-            "scheduler_horizon_steps",
-            training["max_optimizer_steps"],
-        ),
-        save_steps=training["checkpoint_every_steps"], checkpoint_steps=[],
-        batch_size=training["batch_size_per_gpu"], gradient_accumulation=training["gradient_accumulation"],
+        max_steps=max_steps,
+        scheduler_horizon_steps=scheduler_horizon,
+        save_steps=save_steps, checkpoint_steps=[],
+        batch_size=batch_size, gradient_accumulation=accumulation,
         learning_rate=optimization["learning_rate"], warmup_steps=optimization.get("warmup_steps", 0),
         optimizer_betas=tuple(optimization.get("betas", (0.9, 0.95))),
         weight_decay=optimization["weight_decay"], max_grad_norm=optimization["clip_grad_norm"],
@@ -146,10 +211,13 @@ def load_train_config(config_path: Path, resume_from_checkpoint: Path | None = N
         seed=config["seed"], num_workers=config.get("num_workers", 4), resume_from_checkpoint=resume_from_checkpoint,
         attention_layers=[], attention_loss_weight=0.1, attention_qk_stage="post_rope",
         attention_loss_mode="normalized_mask_ce", gce_clusters=None, gce_weight=1.0, gce_levels=[1024, 512],
-        nproc_per_node=int(distributed["nproc_per_node"]),
+        nproc_per_node=nproc_per_node,
         global_batch_size=int(distributed["global_batch_size"]),
         launcher=runtime_config["launcher"], rdzv=runtime_config["rdzv"], precision=runtime_config["precision"],
         vq_grid=list(dataset_config["vq_grid"]),
+        dataset_sample_count=sample_count,
+        optimizer_steps_per_epoch=optimizer_steps_per_epoch,
+        epochs=epochs,
     )
     if objective == "attention":
         values["attention_layers"] = config["attention_loss"]["layers"]
@@ -180,4 +248,7 @@ def launch_summary(args: argparse.Namespace) -> dict:
         "optimizer_steps": args.max_steps,
         "scheduler_horizon_steps": args.scheduler_horizon_steps,
         "checkpoint_interval": args.save_steps,
+        "dataset_sample_count": args.dataset_sample_count,
+        "optimizer_steps_per_epoch": args.optimizer_steps_per_epoch,
+        "epochs": args.epochs,
     }

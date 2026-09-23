@@ -74,18 +74,20 @@ class GCEObjective(nn.Module):
         image_valid = (labels != -100) & (labels >= offset) & (labels < offset + VISUAL_CODEBOOK_SIZE)
         image_logits = logits[image_valid][:, offset : offset + VISUAL_CODEBOOK_SIZE]
         image_targets = labels[image_valid] - offset
-        if not image_targets.numel():
-            zero = logits.float().sum() * 0.0
-            per_level = {level: zero for level in self.grouped_loss.levels}
-            gce = zero
-        else:
+        per_level = {}
+        if image_targets.numel():
             token_values = self.grouped_loss.token_losses(image_logits, image_targets)
-            per_level = {}
-            for level, token_loss in token_values.items():
-                positioned = logits.new_zeros(labels.shape, dtype=torch.float32)
+        else:
+            token_values = {}
+        # Every rank executes every reduction, including ranks with no local
+        # image targets, so token_mean remains a true global DDP mean.
+        for level in self.grouped_loss.levels:
+            positioned = logits[..., 0].float() * 0.0
+            if image_targets.numel():
+                token_loss = token_values[level]
                 positioned[image_valid] = token_loss
-                per_level[level] = reduce_supervised_values(positioned, image_valid, reduction)
-            gce = sum(per_level.values())
+            per_level[level] = reduce_supervised_values(positioned, image_valid, reduction)
+        gce = sum(per_level.values())
         metrics = {
             "gce_loss": gce.detach(),
             **{f"gce_loss_k{level}": value.detach() for level, value in per_level.items()},

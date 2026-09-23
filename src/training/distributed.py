@@ -9,6 +9,7 @@ import random
 import subprocess
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -18,7 +19,7 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 
-from dataset import MagicBrushTokenDataset
+from dataset import EditTokenDataset
 from models.lumina.modeling_xllmx_dimoo import LLaDAForMultiModalGeneration
 from training.checkpoint import (
     build_run_fingerprint,
@@ -333,12 +334,15 @@ def run(args):
             tuple(args.gce_levels),
         ).to(device)
 
-    dataset = MagicBrushTokenDataset(
+    dataset = EditTokenDataset(
         args.train_manifest,
         tokenizer,
         max_sequence_length=args.max_seq_len,
         condition_dropout=args.condition_dropout,
         seed=args.seed,
+    )
+    dataset_composition = Counter(
+        str(row.get("dataset_name", "magicbrush")) for row in dataset.rows
     )
     sampler = DistributedSampler(dataset, shuffle=True, seed=args.seed, drop_last=True)
     loader = DataLoader(
@@ -405,12 +409,23 @@ def run(args):
                         "effective_batch": args.batch_size * args.gradient_accumulation * world_size,
                         "targets": args.lora_targets,
                         "run_fingerprint": run_fingerprint,
+                        "dataset_composition": dict(sorted(dataset_composition.items())),
                     },
                     indent=2,
                 )
                 + "\n",
                 encoding="utf-8",
             )
+        print(
+            json.dumps(
+                {
+                    "dataset_sample_count": len(dataset),
+                    "dataset_composition": dict(sorted(dataset_composition.items())),
+                    "optimizer_steps_per_epoch": args.optimizer_steps_per_epoch,
+                }
+            ),
+            flush=True,
+        )
         if resume_report is not None:
             timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
             (args.output / f"resume_report.{timestamp}.json").write_text(
