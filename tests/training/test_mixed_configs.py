@@ -50,3 +50,20 @@ def test_mixed_attention_recipe_is_postrope_region_mass(mixed_environment):
     assert args.attention_qk_stage == "post_rope"
     assert args.attention_loss_mode == "region_mass"
     assert args.attention_loss_weight == pytest.approx(0.1)
+
+
+@pytest.mark.parametrize(
+    ("name", "objective"),
+    (
+        ("mixed_attention_4g_acc1_5step.yaml", "attention"),
+        ("mixed_gce_4g_acc1_5step.yaml", "gce"),
+    ),
+)
+def test_accumulation_one_diagnostic_configs_are_deliberately_global_batch_16(name, objective, mixed_environment):
+    args = load_train_config(REPOSITORY / "configs/train/diagnostic" / name)
+    assert args.objective == objective
+    assert (args.nproc_per_node, args.batch_size, args.gradient_accumulation) == (4, 4, 1)
+    assert args.global_batch_size == 16
+    assert args.max_steps == args.save_steps == 5
+    assert args.scheduler_horizon_steps == 5190
+    assert args.diagnostic_every_steps == args.gradient_decomposition_every_steps == 1
