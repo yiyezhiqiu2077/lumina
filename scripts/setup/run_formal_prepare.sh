@@ -23,14 +23,17 @@ run_stage() {
   local name="$1"; shift
   local marker="$assets_root/.formal_prepare/${name}._SUCCESS"
   if [[ "$mode" == print ]]; then printf '%q ' "$@"; printf '\n'; return 0; fi
-  if [[ -f "$marker" ]]; then
-    printf 'SKIPPED %s (verified marker)\n' "$name" | tee -a "$log"
-    return 0
-  fi
+  # A marker is provenance, not blind authority: stages are idempotent and
+  # rerun their own lightweight verification/download resume path.
   printf 'START %s\n' "$name" | tee -a "$log"
   if "$@" >>"$log" 2>&1; then
     printf 'SUCCEEDED %s\n' "$name" | tee -a "$log"
-    : > "$marker"
+    uv run python - "$marker" "$name" "$root" "$config" <<'PY'
+import hashlib, json, subprocess, sys, time
+marker, stage, root, config = sys.argv[1:]
+sha=lambda p: hashlib.sha256(open(p,'rb').read()).hexdigest()
+json.dump({"stage": stage, "git_sha": subprocess.check_output(["git","rev-parse","HEAD"], cwd=root, text=True).strip(), "formal_assets_config_sha256": sha(config), "finished_at": time.time()}, open(marker,"w"), indent=2)
+PY
   else
     printf 'FAILED %s\n' "$name" | tee -a "$log" >&2
     return 1
@@ -43,7 +46,7 @@ if [[ "$scope" != eval ]]; then
   run_stage download_models "${python_cmd[@]}" "$root/scripts/setup/download_formal_models.py" --assets-root "$assets_root" --config "$config" --only lumina
   run_stage magicbrush_train_download "${python_cmd[@]}" "$root/scripts/data/download_magicbrush_train.py" --assets-root "$assets_root" --config "$config"
   run_stage magicbrush_geometry "${python_cmd[@]}" "$root/scripts/data/download_magicbrush_train.py" --assets-root "$assets_root" --config "$config" --geometry-only
-  run_stage magicbrush_tokenize torchrun --nproc_per_node="${TOKENIZE_GPUS:-8}" "$root/scripts/data/preprocess_magicbrush.py" pretokenize --manifest "$assets_root/datasets/magicbrush/prepared/train.jsonl" --model "$assets_root/models/Lumina-DiMOO" --output "$assets_root/datasets/magicbrush/tokens/train"
+  run_stage magicbrush_tokenize uv run python -m torch.distributed.run --standalone --nproc_per_node="${TOKENIZE_GPUS:-8}" "$root/scripts/data/preprocess_magicbrush.py" pretokenize --manifest "$assets_root/datasets/magicbrush/prepared/train.jsonl" --model "$assets_root/models/Lumina-DiMOO" --output "$assets_root/datasets/magicbrush/tokens/train"
   run_stage refedit_download "${python_cmd[@]}" "$root/scripts/data/download_refedit.py" --assets-root "$assets_root" --config "$config"
   run_stage refedit_audit "${python_cmd[@]}" "$root/scripts/data/preprocess_refedit.py" audit --raw-root "$assets_root/datasets/refedit/raw" --output "$assets_root/datasets/refedit/audit"
   run_stage refedit_tokenize "${python_cmd[@]}" "$root/scripts/data/preprocess_refedit.py" tokenize --raw-root "$assets_root/datasets/refedit/raw" --model "$assets_root/models/Lumina-DiMOO" --output "$assets_root/datasets/refedit/tokens/train" --seed 42 --target-size 512
@@ -61,7 +64,7 @@ if [[ "$scope" != train ]]; then
   fi
   run_stage magicbrush_test_prepare "${python_cmd[@]}" "$root/scripts/data/prepare_magicbrush_test.py" --test-root "$assets_root/datasets/magicbrush-test/raw" --output "$assets_root/datasets/magicbrush-test/canonical"
   run_stage test_geometry "${python_cmd[@]}" "$root/scripts/eval/prepare_magicbrush_eval.py" --manifest "$assets_root/datasets/magicbrush-test/canonical/manifest.jsonl" --output "$assets_root/datasets/magicbrush-test/geometry.jsonl" --seed 42 --target-size 512
-  run_stage test_tokenize torchrun --nproc_per_node="${TOKENIZE_GPUS:-8}" "$root/scripts/data/preprocess_magicbrush.py" pretokenize --manifest "$assets_root/datasets/magicbrush-test/geometry.jsonl" --model "$assets_root/models/Lumina-DiMOO" --output "$assets_root/datasets/magicbrush-test/tokens"
+  run_stage test_tokenize uv run python -m torch.distributed.run --standalone --nproc_per_node="${TOKENIZE_GPUS:-8}" "$root/scripts/data/preprocess_magicbrush.py" pretokenize --manifest "$assets_root/datasets/magicbrush-test/geometry.jsonl" --model "$assets_root/models/Lumina-DiMOO" --output "$assets_root/datasets/magicbrush-test/tokens"
   run_stage test_subset "${python_cmd[@]}" "$root/scripts/eval/evaluate_gt_mask_editing.py" --manifest "$assets_root/datasets/magicbrush-test/tokens/manifest.jsonl" --subset "$assets_root/datasets/magicbrush-test/eval_subset.jsonl" --prepare-subset-only --limit 0 --seed 42
   run_stage formal_asset_audit "${python_cmd[@]}" "$root/scripts/tools/audit_formal_assets.py" --mode all --output "$assets_root/artifacts/formal_assets.json" --asset-config "$config" --model "$assets_root/models/Lumina-DiMOO" --train-manifest "$assets_root/datasets/mixed/train/manifest.jsonl" --gce-clusters "$assets_root/artifacts/gce_clusters_1024_512.pt" --canonical-test-manifest "$assets_root/datasets/magicbrush-test/canonical/manifest.jsonl" --test-token-manifest "$assets_root/datasets/magicbrush-test/tokens/manifest.jsonl" --test-subset "$assets_root/datasets/magicbrush-test/eval_subset.jsonl" --dino-model "$assets_root/models/dinov2-base" --clip-model "$assets_root/models/clip-vit-large-patch14"
 fi

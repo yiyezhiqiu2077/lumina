@@ -110,6 +110,8 @@ PY
 done
 
 if [[ "$mode" == '--run' ]]; then
+    formal_asset_path="${FORMAL_ASSET_AUDIT_PATH:-${ASSET_ROOT:+$ASSET_ROOT/artifacts/formal_assets.json}}"
+    formal_asset_path="${formal_asset_path:-$OUTPUT_ROOT/formal_assets.json}"
     dirty="$("$git_bin" -C "$root" status --short)"
     [[ -z "$dirty" ]] || die "refusing dirty formal run; commit or stash first:\n$dirty"
 
@@ -126,7 +128,7 @@ if [[ "$mode" == '--run' ]]; then
 
     # This gates the immutable 8807/7804 training composition, all token files,
     # Lumina/VQ identity, and GCE cluster compatibility before group 1 starts.
-    run_asset_audit --mode train --output "$OUTPUT_ROOT/formal_assets.json" \
+    run_asset_audit --mode train --output "$formal_asset_path" \
         --model "$MODEL_PATH" --train-manifest "$DATA_CONFIG" --gce-clusters "$GCE_CLUSTER_PATH"
 fi
 

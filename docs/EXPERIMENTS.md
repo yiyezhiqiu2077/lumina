@@ -31,85 +31,6 @@ local_assets/
 
 全部 pinned public assets 位于 `configs/formal_assets.yaml`，禁止用 `main` 或短 revision。
 
-## 下载正式模型
-
-```bash
-uv run python scripts/setup/download_formal_models.py --assets-root "$ASSET_ROOT"
-```
-
-下载器仅在完整 snapshot 且 `download_manifest.json` identity 一致时跳过；半完成目录不会被当作可用资产。
-
-## 准备 MagicBrush Train
-
-```bash
-uv run python scripts/data/download_magicbrush_train.py --assets-root "$ASSET_ROOT"
-uv run python scripts/data/download_magicbrush_train.py --assets-root "$ASSET_ROOT" --geometry-only
-torchrun --nproc_per_node=8 scripts/data/preprocess_magicbrush.py pretokenize \
-  --manifest "$ASSET_ROOT/datasets/magicbrush/prepared/train.jsonl" \
-  --model "$ASSET_ROOT/models/Lumina-DiMOO" --output "$ASSET_ROOT/datasets/magicbrush/tokens/train"
-```
-
-脚本读取 pinned `osunlp/MagicBrush` `train` split 的官方字段，严格要求 8807 条；训练不拆 MagicBrush train/dev/val。
-
-## 准备 RefEdit
-
-```bash
-uv run python scripts/data/download_refedit.py --assets-root "$ASSET_ROOT"
-uv run python scripts/data/preprocess_refedit.py audit --raw-root "$ASSET_ROOT/datasets/refedit/raw" --output "$ASSET_ROOT/datasets/refedit/audit"
-uv run python scripts/data/preprocess_refedit.py tokenize --raw-root "$ASSET_ROOT/datasets/refedit/raw" \
-  --model "$ASSET_ROOT/models/Lumina-DiMOO" --output "$ASSET_ROOT/datasets/refedit/tokens/train" --seed 42 --target-size 512
-```
-
-RefEdit 固定 revision，strict parser 后必须恰为 7804 条。
-
-## 构建 Mixed Tokens
-
-```bash
-uv run python scripts/data/build_mixed_edit_manifest.py \
-  --magicbrush-manifest "$ASSET_ROOT/datasets/magicbrush/tokens/train/manifest.jsonl" \
-  --refedit-manifest "$ASSET_ROOT/datasets/refedit/tokens/train/manifest.jsonl" --output "$ASSET_ROOT/datasets/mixed"
-```
-
-正式 manifest 必须为 MagicBrush 8807 + RefEdit 7804 = 16611，sample key 唯一、payload 均为 32×32。
-
-## 构建 GCE Cluster
-
-```bash
-uv run python scripts/tools/gce/build_clusters.py --model "$ASSET_ROOT/models/Lumina-DiMOO" \
-  --output "$ASSET_ROOT/artifacts/gce_clusters_1024_512.pt" --levels 1024 512 --seed 0
-```
-
-## 准备 MagicBrush TEST
-
-仓库默认通过 MagicBrush 官方 SharePoint 自动获取受公开密码保护的 TEST archive，并仅解压到 `local_assets/`；不得上传、镜像或重新分发该 TEST 数据。
-
-```bash
-uv run python scripts/data/download_magicbrush_test.py \
-  --output "$ASSET_ROOT/datasets/magicbrush-test/raw"
-uv run python scripts/data/prepare_magicbrush_test.py \
-  --test-root "$ASSET_ROOT/datasets/magicbrush-test/raw" \
-  --output "$ASSET_ROOT/datasets/magicbrush-test/canonical"
-uv run python scripts/eval/prepare_magicbrush_eval.py --manifest "$ASSET_ROOT/datasets/magicbrush-test/canonical/manifest.jsonl" --output "$ASSET_ROOT/datasets/magicbrush-test/geometry.jsonl"
-torchrun --nproc_per_node=8 scripts/data/preprocess_magicbrush.py pretokenize --manifest "$ASSET_ROOT/datasets/magicbrush-test/geometry.jsonl" --model "$ASSET_ROOT/models/Lumina-DiMOO" --output "$ASSET_ROOT/datasets/magicbrush-test/tokens"
-```
-
-离线 fallback 不访问网络，只校验、解压并记录本地官方 archive 的 provenance：
-
-```bash
-uv run python scripts/data/download_magicbrush_test.py \
-  --archive /path/to/official/test.zip \
-  --output "$ASSET_ROOT/datasets/magicbrush-test/raw"
-```
-
-Downloader 会拒绝 ZIP path traversal 或不完整下载；成功后写入 archive SHA256、大小和 source URL。Importer 优先读取真实 `edit_sessions.json` 和 archive 内路径。若不是 535 sessions / 1053 turns，或存在重复、缺图、空 mask，审计明确报 `REAL TEST ARCHIVE NOT VERIFIED`。每个 turn 独立使用官方提供 source，不串接模型上一轮输出。
-
-## 准备评测权重
-
-```bash
-uv run python scripts/setup/download_formal_models.py --assets-root "$ASSET_ROOT" --only dino --only clip
-uv run python scripts/setup/prefetch_lpips.py --assets-root "$ASSET_ROOT"
-```
-
 ## 资产审计
 
 一键准备支持失败停止、阶段 `_SUCCESS` marker、验证后跳过与任意 cwd：
@@ -119,7 +40,7 @@ bash scripts/setup/run_formal_prepare.sh --print-command
 bash scripts/setup/run_formal_prepare.sh --run
 ```
 
-顺序为 environment、models、MagicBrush train、geometry、tokens、RefEdit、mixed、GCE、metrics、LPIPS、Chromium、TEST download、TEST prepare、TEST token、final audit。设置 `MAGICBRUSH_TEST_ARCHIVE=/path/to/official/test.zip` 时 pipeline 自动走离线 fallback。`formal_assets.json` 记录 code SHA、dirty、`uv.lock`、assets、token、GCE 和 metrics 的 identity/hash。
+这一个命令自动下载 Lumina、MagicBrush train、RefEdit、DINO、CLIP、LPIPS 与官方 MagicBrush TEST，并完成 tokenization、mixed manifest、GCE 和 TEST audit。无需 `MAGICBRUSH_TEST_ROOT`。正式 TEST 要求 535 sessions / 1053 turns，失败明确报 `REAL TEST ARCHIVE NOT VERIFIED`。`formal_assets.json` 记录所有 identity/hash。
 
 ## 六组正式训练
 

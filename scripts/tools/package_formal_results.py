@@ -9,6 +9,7 @@ import json
 import subprocess
 import tarfile
 import tempfile
+import os
 from pathlib import Path
 
 MAX_BYTES = 50 * 1024 * 1024
@@ -46,6 +47,17 @@ def main() -> None:
     parser.add_argument("--eval-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    audit_path = Path(os.environ.get("FORMAL_ASSET_AUDIT_PATH", args.train_root / "formal_assets.json"))
+    if not audit_path.is_file(): raise RuntimeError(f"formal asset authority is missing: {audit_path}")
+    for root, log_name in ((args.train_root, "2x3_formal_pipeline.log"), (args.eval_root, "2x3_eval_pipeline.log")):
+        log = root / log_name
+        if not log.is_file() or sum("SUCCEEDED" in line for line in log.read_text().splitlines()) != 6:
+            raise RuntimeError(f"package requires six successful runs in {log}")
+    comparison_json, comparison_csv = args.eval_root / "comparison.json", args.eval_root / "comparison.csv"
+    if not comparison_json.is_file() or not comparison_csv.is_file(): raise RuntimeError("package requires comparison.json and comparison.csv")
+    eval_rows = list(args.eval_root.glob("*/per_sample.jsonl"))
+    if len(eval_rows) != 6 or any(sum(1 for line in path.read_text().splitlines() if line) != 1053 for path in eval_rows):
+        raise RuntimeError("package requires six 1053-row evaluation outputs")
     with tempfile.TemporaryDirectory(prefix="lumina_formal_package_") as temporary:
         stage = Path(temporary)
         copied: list[Path] = []
@@ -68,6 +80,9 @@ def main() -> None:
             audit = root / "formal_assets.json"
             if audit.is_file() and _safe(audit):
                 target = stage / label / audit.name; target.parent.mkdir(parents=True, exist_ok=True); target.write_bytes(audit.read_bytes()); copied.append(target)
+        target = stage / "formal_assets.json"; target.write_bytes(audit_path.read_bytes()); copied.append(target)
+        for item in (comparison_json, comparison_csv):
+            target = stage / item.name; target.write_bytes(item.read_bytes()); copied.append(target)
         repo = Path(__file__).resolve().parents[2]
         code_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
         status = subprocess.check_output(["git", "status", "--short"], cwd=repo, text=True)

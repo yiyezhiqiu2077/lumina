@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +24,7 @@ def _save_image(value: Any, path: Path, *, mode: str) -> None:
     image.convert(mode).save(path)
 
 
-def canonicalize_rows(rows: list[dict[str, Any]], output: Path) -> list[dict[str, Any]]:
+def canonicalize_rows(rows, output: Path) -> list[dict[str, Any]]:
     images = output / "images"
     images.mkdir(parents=True, exist_ok=True)
     canonical = []
@@ -67,11 +70,17 @@ def main() -> None:
         return
     from datasets import load_dataset
     dataset = load_dataset(asset["repo_id"], split=asset["split"], revision=asset["revision"])
-    rows = canonicalize_rows([dict(item) for item in dataset], raw)
+    if raw.exists():
+        if (raw / "dataset_meta.json").is_file(): return
+        raise RuntimeError(f"incomplete MagicBrush raw output: {raw}")
+    staging = Path(tempfile.mkdtemp(prefix=".magicbrush_raw.", dir=root))
+    # Iterate/save one sample at a time: never retain 8807×3 PIL images.
+    rows = canonicalize_rows((dict(item) for item in dataset), staging)
     if len(rows) != asset["expected_samples"]:
-        raise ValueError(f"MagicBrush count must be {asset['expected_samples']}, got {len(rows)}")
-    write_jsonl(raw / "train.jsonl", rows)
-    write_json(raw / "dataset_meta.json", {"repo_id": asset["repo_id"], "resolved_revision": asset["revision"], "split": asset["split"], "sample_count": len(rows), "fields": list(REQUIRED_FIELDS)})
+        shutil.rmtree(staging); raise ValueError(f"MagicBrush count must be {asset['expected_samples']}, got {len(rows)}")
+    write_jsonl(staging / "train.jsonl", rows)
+    write_json(staging / "dataset_meta.json", {"repo_id": asset["repo_id"], "resolved_revision": asset["revision"], "split": asset["split"], "sample_count": len(rows), "fields": list(REQUIRED_FIELDS)})
+    os.replace(staging, raw)
 
 
 if __name__ == "__main__":

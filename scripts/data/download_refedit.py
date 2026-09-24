@@ -20,11 +20,10 @@ def main() -> None:
         import json
         existing = json.loads(marker.read_text(encoding="utf-8"))
         if existing.get("repo_id") == entry["repo_id"] and existing.get("resolved_revision") == entry["revision"]:
-            return
+            if any(destination.iterdir()): return
         raise RuntimeError(f"RefEdit destination identity mismatch: {destination}")
-    if destination.exists():
-        raise RuntimeError(f"RefEdit destination is incomplete (no verified marker): {destination}")
     from huggingface_hub import snapshot_download
+    destination.parent.mkdir(parents=True, exist_ok=True)
     snapshot_download(repo_id=entry["repo_id"], repo_type="dataset", revision=entry["revision"], local_dir=str(destination))
     files = {item.relative_to(destination).as_posix(): sha256(item) for item in sorted(destination.rglob("*")) if item.is_file()}
     if not files:

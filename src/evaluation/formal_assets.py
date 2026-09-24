@@ -126,9 +126,12 @@ def audit_test_assets(canonical_manifest: Path, token_manifest: Path, subset: Pa
     subset_keys = [str(row.get("sample_key", "")) for row in subset_rows]
     if len(canonical_keys) != len(set(canonical_keys)) or len(keys) != len(set(keys)) or len(subset_keys) != len(set(subset_keys)):
         raise ValueError("formal MagicBrush test manifest/subset contains duplicate sample_key values")
-    if not set(subset_keys).issubset(set(keys)):
-        raise ValueError("formal eval_subset contains rows absent from the MagicBrush TEST token manifest")
+    if canonical_keys != keys or canonical_keys != subset_keys:
+        raise ValueError("formal TEST canonical/token/subset sample_key order must be identical")
+    if len(rows) != FORMAL_TEST_TURNS or len(subset_rows) != FORMAL_TEST_TURNS:
+        raise ValueError("REAL TEST ARCHIVE NOT VERIFIED: token manifest and eval subset must both contain 1053 turns")
     missing_tokens = []
+    invalid_payloads = []
     for row in rows:
         token = Path(str(row.get("token_file", "")))
         token = token if token.is_absolute() else token_manifest.parent / token
@@ -136,8 +139,19 @@ def audit_test_assets(canonical_manifest: Path, token_manifest: Path, subset: Pa
             missing_tokens.append(str(token))
             if len(missing_tokens) >= 3:
                 break
+            continue
+        import torch
+        payload = torch.load(token, map_location="cpu", weights_only=True)
+        if (tuple(getattr(payload.get("source_codes"), "shape", ())) != (32, 32) or tuple(getattr(payload.get("target_codes"), "shape", ())) != (32, 32)
+                or tuple(getattr(payload.get("edit_mask"), "shape", ())) != (32, 32) or not bool(payload.get("edit_mask", torch.zeros(())).any())
+                or payload.get("token_height") != 32 or payload.get("token_width") != 32):
+            invalid_payloads.append(str(token))
+            if len(invalid_payloads) >= 3:
+                break
     if missing_tokens:
         raise FileNotFoundError(f"formal MagicBrush TEST token files are missing: {missing_tokens}")
+    if invalid_payloads:
+        raise ValueError(f"formal MagicBrush TEST token payload contract failed: {invalid_payloads}")
     return {
         "split": "test",
         "canonical_manifest": {"path": str(canonical_manifest), "sha256": sha256(canonical_manifest), "sample_count": len(canonical_rows)},

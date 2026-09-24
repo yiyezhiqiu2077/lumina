@@ -54,6 +54,18 @@ def _read_annotations(path: Path) -> list[dict[str, Any]]:
                     if not isinstance(turn, dict):
                         raise ValueError(f"edit session {session_index} turn {turn_index} is not an object")
                     values.append({**session, **turn, "session_id": session.get("session_id", session.get("img_id")), "turn_index": turn.get("turn_index", turn_index)})
+        elif isinstance(payload, dict) and payload and all(isinstance(turns, list) for turns in payload.values()):
+            # Real official TEST layout: {img_id: [turn, ...]}.  The archive
+            # records each turn's own GT source; no generated previous turn is
+            # ever introduced here.
+            values = [
+                {**turn, "img_id": str(img_id), "session_id": str(img_id), "turn_index": turn_index}
+                for img_id, turns in payload.items()
+                for turn_index, turn in enumerate(turns)
+                if isinstance(turn, dict)
+            ]
+            if sum(len(turns) for turns in payload.values()) != len(values):
+                raise ValueError("official dict edit_sessions contains a non-object turn")
         elif isinstance(payload, dict):
             candidates = [value for value in payload.values() if isinstance(value, list)]
             if len(candidates) != 1:

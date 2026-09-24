@@ -83,6 +83,24 @@ for index in "${!configs[@]}"; do
 done
 
 [[ "$mode" == '--run' ]] || exit 0
+formal_asset_path="${FORMAL_ASSET_AUDIT_PATH:-${ASSET_ROOT:+$ASSET_ROOT/artifacts/formal_assets.json}}"
+formal_asset_path="${formal_asset_path:-$OUTPUT_ROOT/formal_assets.json}"
+
+pipeline_log="$EVAL_OUTPUT_ROOT/2x3_eval_pipeline.log"
+: > "$pipeline_log"
+log_pipeline() { printf '%s %s\n' "$(date -Is)" "$*" | tee -a "$pipeline_log"; }
+verify_eval() {
+    uv run python - "$1" <<'PY'
+import json, math, sys
+from pathlib import Path
+rows=[json.loads(x) for x in (Path(sys.argv[1])/"per_sample.jsonl").read_text().splitlines() if x]
+required='edit_token_accuracy source_copy_token_accuracy changed_token_accuracy inside_l1_target inside_mse_target inside_psnr_target inside_l1_target_recon boundary_l1_source_recon full_l1_target full_mse_target full_psnr_target full_lpips roi_lpips full_dino_i roi_dino_i full_clip_i roi_clip_i'.split()
+if len(rows)!=1053: raise SystemExit(f"expected 1053 per-sample rows, got {len(rows)}")
+for metric in required:
+    values=[r.get(metric) for r in rows]
+    if len(values)!=1053 or any(v is None or not math.isfinite(float(v)) for v in values): raise SystemExit(f"invalid metric {metric}")
+PY
+}
 
 for index in "${!configs[@]}"; do
     checkpoint="${train_outputs[$index]}/checkpoint-$(printf '%06d' "${max_steps[$index]}")"
@@ -91,20 +109,23 @@ for index in "${!configs[@]}"; do
         die "existing formal evaluation output detected: ${eval_outputs[$index]}"
 done
 
-run_asset_audit --mode eval --output "$OUTPUT_ROOT/formal_assets.json" --model "$MODEL_PATH" \
+run_asset_audit --mode eval --output "$formal_asset_path" --model "$MODEL_PATH" \
     --canonical-test-manifest "$MAGICBRUSH_TEST_CANONICAL_MANIFEST" \
     --test-token-manifest "$MAGICBRUSH_TEST_TOKEN_MANIFEST" --test-subset "$MAGICBRUSH_TEST_SUBSET" \
     --dino-model "$DINO_MODEL_PATH" --clip-model "$CLIP_MODEL_PATH"
 
 for index in "${!configs[@]}"; do
     checkpoint="${train_outputs[$index]}/checkpoint-$(printf '%06d' "${max_steps[$index]}")"
-    run_evaluator --manifest "$MAGICBRUSH_TEST_TOKEN_MANIFEST" --subset "$MAGICBRUSH_TEST_SUBSET" --limit 0 \
+    log_pipeline "START ${labels[$index]}"
+    if ! run_evaluator --manifest "$MAGICBRUSH_TEST_TOKEN_MANIFEST" --subset "$MAGICBRUSH_TEST_SUBSET" --limit 0 \
         --model "$MODEL_PATH" --checkpoint "$checkpoint" --output "${eval_outputs[$index]}" --model-label "${labels[$index]}" \
         --timesteps "${FORMAL_EVAL_TIMESTEPS:-64}" --cfg-scale "${FORMAL_EVAL_CFG_SCALE:-2.5}" \
         --cfg-img "${FORMAL_EVAL_CFG_IMG:-4.0}" --temperature "${FORMAL_EVAL_TEMPERATURE:-1.0}" --seed "${FORMAL_EVAL_SEED:-42}" \
-        --lpips --lpips-net alex --dino-model "$DINO_MODEL_PATH" --clip-model "$CLIP_MODEL_PATH" --roi-padding-ratio 0.10
+        --lpips --lpips-net alex --dino-model "$DINO_MODEL_PATH" --clip-model "$CLIP_MODEL_PATH" --roi-padding-ratio 0.10; then log_pipeline "FAILED ${labels[$index]}"; exit 1; fi
     [[ -s "${eval_outputs[$index]}/per_sample.jsonl" && -s "${eval_outputs[$index]}/summary.json" ]] || \
         die "formal evaluation did not produce summary/per_sample output: ${eval_outputs[$index]}"
+    if [[ -z "$evaluator_override" ]] && ! verify_eval "${eval_outputs[$index]}"; then log_pipeline "FAILED ${labels[$index]} metric_gate"; exit 1; fi
+    log_pipeline "SUCCEEDED ${labels[$index]}"
 done
 
 compare_args=(--output "$EVAL_OUTPUT_ROOT/comparison")
