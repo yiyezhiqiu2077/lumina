@@ -13,21 +13,28 @@ mode="${2:---print-command}"
 for variable in MODEL_PATH DATA_ROOT DATA_CONFIG OUTPUT_ROOT CUDA_VISIBLE_DEVICES; do
     [[ -n "${!variable:-}" ]] || { printf 'missing %s\n' "$variable" >&2; exit 1; }
 done
-[[ -f "$config" && -f "$DATA_CONFIG" && -f "$MODEL_PATH/config.json" ]] || {
-    printf 'config, data manifest, or model path is invalid\n' >&2; exit 1;
+[[ -f "$config" && -f "$DATA_CONFIG" && -d "$DATA_ROOT" && -d "$OUTPUT_ROOT" && -f "$MODEL_PATH/config.json" ]] || {
+    printf 'config, data manifest, data root, output root, or model path is invalid\n' >&2; exit 1;
 }
-nproc="$(python - "$config" <<'PY'
+[[ -n "$(command -v uv)" ]] || { printf 'uv is required for the mixed-data workflow\n' >&2; exit 1; }
+read -r nproc objective <<< "$(uv run python - "$config" <<'PY'
 import sys
 import yaml
-print(yaml.safe_load(open(sys.argv[1], encoding='utf-8'))['distributed']['nproc_per_node'])
+payload = yaml.safe_load(open(sys.argv[1], encoding='utf-8'))
+print(payload['distributed']['nproc_per_node'], payload['objective']['mode'])
 PY
 )"
+if [[ "$objective" == 'gce' ]]; then
+    [[ -n "${GCE_CLUSTER_PATH:-}" && -f "$GCE_CLUSTER_PATH" ]] || {
+        printf 'GCE_CLUSTER_PATH must name an existing cluster file for GCE runs\n' >&2; exit 1;
+    }
+fi
 IFS=',' read -r -a devices <<< "$CUDA_VISIBLE_DEVICES"
 [[ "${#devices[@]}" == "$nproc" ]] || {
     printf 'CUDA_VISIBLE_DEVICES has %s devices but config requests %s ranks\n' "${#devices[@]}" "$nproc" >&2
     exit 1
 }
-command=(python scripts/train/train.py --config "$config")
+command=(uv run python scripts/train/train.py --config "$config")
 printf 'nproc_per_node=%s\n' "$nproc"
 printf 'command:'; printf ' %q' "${command[@]}"; printf '\n'
 if [[ "$mode" == '--run' ]]; then

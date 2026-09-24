@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import random
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,28 @@ from dataset.utils import read_jsonl, write_jsonl
 
 
 IMAGE_TOKEN_OFFSET = 126356
+
+SUMMARY_METRICS = (
+    "edit_token_accuracy",
+    "source_copy_token_accuracy",
+    "changed_token_accuracy",
+    "inside_l1_target",
+    "inside_mse_target",
+    "inside_psnr_target",
+    "inside_l1_target_recon",
+    "boundary_l1_source_recon",
+    "full_l1_target",
+    "full_mse_target",
+    "full_psnr_target",
+    "seconds",
+)
+MASK_RATIO_BINS = (
+    ("0-10%", 0.0, 0.10),
+    ("10-25%", 0.10, 0.25),
+    ("25-50%", 0.25, 0.50),
+    ("50-75%", 0.50, 0.75),
+    ("75-100%", 0.75, 1.0),
+)
 
 
 def resolve_token_file(row: dict[str, Any], manifest: Path) -> Path:
@@ -50,7 +73,12 @@ def prepare_eval_subset(manifest: Path, subset: Path, *, seed: int, limit: int) 
     for row in read_jsonl(manifest):
         payload = load_token_payload(row, manifest)
         if bool(payload["edit_mask"].any()):
-            eligible.append(dict(row))
+            portable_row = dict(row)
+            source_token_path = resolve_token_file(portable_row, manifest)
+            portable_row["token_file"] = os.path.relpath(
+                source_token_path.resolve(), subset.parent.resolve()
+            )
+            eligible.append(portable_row)
     if len(eligible) < limit:
         raise ValueError(f"only {len(eligible)} non-empty-mask samples, need {limit}")
     selected = random.Random(seed).sample(eligible, limit)
@@ -126,9 +154,43 @@ def token_accuracies(
     if outside_accuracy != 1.0:
         raise AssertionError(f"hard-lock violation: outside_token_accuracy={outside_accuracy}")
     edit_accuracy = float((generated[mask] == target[mask]).float().mean()) if mask.any() else float("nan")
+    source_copy_accuracy = float((source[mask] == target[mask]).float().mean()) if mask.any() else float("nan")
+    changed = mask & (source != target)
+    changed_accuracy = (
+        float((generated[changed] == target[changed]).float().mean())
+        if changed.any()
+        else float("nan")
+    )
     return {
         "edit_token_accuracy": edit_accuracy,
+        "source_copy_token_accuracy": source_copy_accuracy,
+        "changed_token_accuracy": changed_accuracy,
         "outside_token_accuracy": outside_accuracy,
+    }
+
+
+def oracle_codes(source_codes: torch.Tensor, target_codes: torch.Tensor, edit_mask: torch.Tensor) -> torch.Tensor:
+    """The GT-mask hard-lock token oracle: target inside, source outside."""
+    if source_codes.shape != target_codes.shape or source_codes.shape != edit_mask.shape:
+        raise ValueError("source/target/mask token shapes differ")
+    return torch.where(edit_mask.bool(), target_codes, source_codes)
+
+
+def oracle_token_accuracies(
+    source_codes: torch.Tensor, target_codes: torch.Tensor, edit_mask: torch.Tensor,
+) -> dict[str, float]:
+    """Token metrics for the constructed oracle, including its useful baseline."""
+    mask = edit_mask.bool().reshape(-1)
+    source = source_codes.reshape(-1)
+    target = target_codes.reshape(-1)
+    return {
+        "edit_token_accuracy": 1.0 if mask.any() else float("nan"),
+        "source_copy_token_accuracy": (
+            float((source[mask] == target[mask]).float().mean()) if mask.any() else float("nan")
+        ),
+        # The requested oracle convention is one even when no token changes.
+        "changed_token_accuracy": 1.0,
+        "outside_token_accuracy": 1.0,
     }
 
 
@@ -196,13 +258,41 @@ def pixel_metrics(
     }
 
 
-def numeric_summary(rows: list[dict[str, Any]]) -> dict[str, float | int | None]:
-    """Mean every numeric per-sample metric while leaving identifiers untouched."""
-    summary: dict[str, float | int | None] = {"samples": len(rows)}
-    keys = sorted({key for row in rows for key in row})
-    for key in keys:
-        values = [row[key] for row in rows if isinstance(row.get(key), (int, float)) and not isinstance(row.get(key), bool)]
-        finite = [float(value) for value in values if math.isfinite(float(value))]
-        if finite:
-            summary[key] = float(np.mean(finite))
+def metric_summary(
+    rows: list[dict[str, Any]], metrics: tuple[str, ...] = SUMMARY_METRICS,
+) -> dict[str, Any]:
+    """Summarize only declared evaluation metrics, never metadata fields."""
+    summary: dict[str, Any] = {"samples": len(rows), "metrics": {}}
+    for key in metrics:
+        values = [
+            float(row[key]) for row in rows
+            if isinstance(row.get(key), (int, float))
+            and not isinstance(row.get(key), bool)
+            and math.isfinite(float(row[key]))
+        ]
+        summary["metrics"][key] = {
+            "count": len(values),
+            "mean": float(np.mean(values)) if values else None,
+            "std": float(np.std(values)) if values else None,
+            "median": float(np.median(values)) if values else None,
+        }
     return summary
+
+
+def mask_ratio_binned_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Apply the fixed mask-area bins to the same explicit metric whitelist."""
+    result: dict[str, Any] = {}
+    for label, lower, upper in MASK_RATIO_BINS:
+        bucket = [
+            row for row in rows
+            if isinstance(row.get("mask_ratio"), (int, float))
+            and float(row["mask_ratio"]) >= lower
+            and (float(row["mask_ratio"]) < upper or (upper == 1.0 and float(row["mask_ratio"]) <= upper))
+        ]
+        result[label] = metric_summary(bucket)
+    return result
+
+
+# Backward-compatible name for callers written before summaries gained count,
+# standard deviation, and median.  New code should use metric_summary.
+numeric_summary = metric_summary

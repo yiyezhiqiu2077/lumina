@@ -13,4 +13,4 @@ lora: {rank: 16, alpha: 16.0, dropout: 0.05, targets: [q_proj, k_proj, v_proj, a
 diagnostics: {every_steps: 25, gradient_decomposition_every_steps: 100}
 quality_gate: {enabled: true, baseline_start: 101, baseline_end: 400, window_size: 50, max_loss_ratio: 1.75, consecutive_windows: 2, max_clip_fraction: 0.95, max_abs_logit: 1.0e4, max_update_ratio: 0.25}
 distributed: {nproc_per_node: 8, global_batch_size: 32}
-attention_loss: {weight: 0.1, qk_stage: post_rope, mode: region_mass, layers: [24, 25, 26, 27], query: real_instruction_tokens, keys: clean_source_image_spatial_tokens, target: gt_region_mass}
+attention_loss: {weight: 0.3, qk_stage: post_rope, mode: region_mass, layers: [24, 25, 26, 27], query: real_instruction_tokens, keys: clean_source_image_spatial_tokens, target: gt_region_mass}

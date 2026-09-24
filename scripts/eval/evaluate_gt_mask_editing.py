@@ -20,7 +20,10 @@ from evaluation.gt_mask_editing import (
     effective_pixel_mask,
     load_lora_recipe,
     load_token_payload,
-    numeric_summary,
+    mask_ratio_binned_summary,
+    metric_summary,
+    oracle_codes,
+    oracle_token_accuracies,
     pixel_metrics,
     prepare_eval_subset,
     read_eval_subset,
@@ -44,6 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--model-label", type=str)
+    parser.add_argument("--oracle-only", action="store_true", help="decode/evaluate the GT-mask token oracle without loading a denoiser")
     parser.add_argument("--timesteps", type=int, default=64)
     parser.add_argument("--cfg-scale", type=float, default=2.5)
     parser.add_argument("--cfg-img", type=float, default=4.0)
@@ -90,6 +94,8 @@ def main() -> None:
         return
     if args.model is None or args.output is None or args.model_label is None:
         raise SystemExit("--model, --output, and --model-label are required for evaluation")
+    if args.oracle_only and args.checkpoint is not None:
+        raise SystemExit("--oracle-only cannot be combined with --checkpoint")
     rows = read_eval_subset(args.subset)
     if len(rows) > args.limit:
         raise ValueError(f"fixed subset has {len(rows)} rows, limit={args.limit}")
@@ -97,12 +103,16 @@ def main() -> None:
     image_dir = args.output / "images"
     source_recon_dir = args.output / "source_recon"
     target_recon_dir = args.output / "target_recon"
-    for directory in (image_dir, source_recon_dir, target_recon_dir):
+    oracle_dir = args.output / "oracle_hardlock"
+    for directory in (image_dir, source_recon_dir, target_recon_dir, oracle_dir):
         directory.mkdir(exist_ok=True)
     (args.output / "eval_args.json").write_text(json.dumps(vars(args), indent=2, default=str) + "\n", encoding="utf-8")
     device = torch.device("cuda")
-    tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True, local_files_only=True)
-    model = _load_model(args.model, args.checkpoint, device)
+    tokenizer = None
+    model = None
+    if not args.oracle_only:
+        tokenizer = AutoTokenizer.from_pretrained(args.model, trust_remote_code=True, local_files_only=True)
+        model = _load_model(args.model, args.checkpoint, device)
     vqvae = VQModel.from_pretrained(args.model, subfolder="vqvae", local_files_only=True).to(device).eval()
     system = create_prompt_templates()["image_editing"]
     output_rows = []
@@ -115,53 +125,70 @@ def main() -> None:
         processed_size = (int(payload["processed_width"]), int(payload["processed_height"]))
         if tuple(source_codes.shape) != (token_height, token_width):
             raise AssertionError("source code geometry is inconsistent")
-        conditional_ids = tokenizer(f"<system>{system}</system><user>{row['instruction']}</user>", truncation=False, padding=False)["input_ids"]
-        unconditional_ids = tokenizer(f"<system>{system}</system><user><uncondition></user>", truncation=False, padding=False)["input_ids"]
-        source_sequence = _spatial_tokens(source_codes)
-        conditional_prefix = conditional_ids[:-1] + source_sequence + conditional_ids[-1:]
-        unconditional_prefix = unconditional_ids[:-1] + source_sequence + unconditional_ids[-1:]
-        target_sequence = [SPECIAL_TOKENS["answer_start"], SPECIAL_TOKENS["boi"]]
-        target_sequence += _target_tokens(source_codes, edit_mask)
-        target_sequence += [SPECIAL_TOKENS["eoi"], SPECIAL_TOKENS["answer_end"]]
-        code_start = len(conditional_prefix) + 2
-        prompt = torch.tensor([conditional_prefix + target_sequence], device=device)
-        generator = torch.Generator(device=device).manual_seed(int(row["inference_seed"]))
-        torch.cuda.synchronize(device)
-        started = time.perf_counter()
-        generated = generate_i2i_gt_mask_hard_lock(
-            model, prompt, source_codes=source_codes, edit_mask=edit_mask, code_start=code_start,
-            timesteps=args.timesteps, temperature=args.temperature, cfg_scale=args.cfg_scale, cfg_img=args.cfg_img,
-            uncon_text=torch.tensor([unconditional_prefix], device=device),
-            uncon_image=torch.tensor([conditional_ids], device=device), generator=generator,
-        )
-        torch.cuda.synchronize(device)
-        seconds = time.perf_counter() - started
-        accuracies = token_accuracies(generated, source_codes, target_codes, edit_mask)
+        oracle = oracle_codes(source_codes, target_codes, edit_mask)
+        oracle_with_offset = (oracle.flatten()[None] + IMAGE_TOKEN_OFFSET).to(device)
+        if args.oracle_only:
+            generated = oracle_with_offset
+            seconds = 0.0
+            accuracies = oracle_token_accuracies(source_codes, target_codes, edit_mask)
+        else:
+            assert tokenizer is not None and model is not None
+            conditional_ids = tokenizer(f"<system>{system}</system><user>{row['instruction']}</user>", truncation=False, padding=False)["input_ids"]
+            unconditional_ids = tokenizer(f"<system>{system}</system><user><uncondition></user>", truncation=False, padding=False)["input_ids"]
+            source_sequence = _spatial_tokens(source_codes)
+            conditional_prefix = conditional_ids[:-1] + source_sequence + conditional_ids[-1:]
+            unconditional_prefix = unconditional_ids[:-1] + source_sequence + unconditional_ids[-1:]
+            target_sequence = [SPECIAL_TOKENS["answer_start"], SPECIAL_TOKENS["boi"]]
+            target_sequence += _target_tokens(source_codes, edit_mask)
+            target_sequence += [SPECIAL_TOKENS["eoi"], SPECIAL_TOKENS["answer_end"]]
+            code_start = len(conditional_prefix) + 2
+            prompt = torch.tensor([conditional_prefix + target_sequence], device=device)
+            generator = torch.Generator(device=device).manual_seed(int(row["inference_seed"]))
+            torch.cuda.synchronize(device)
+            started = time.perf_counter()
+            generated = generate_i2i_gt_mask_hard_lock(
+                model, prompt, source_codes=source_codes, edit_mask=edit_mask, code_start=code_start,
+                timesteps=args.timesteps, temperature=args.temperature, cfg_scale=args.cfg_scale, cfg_img=args.cfg_img,
+                uncon_text=torch.tensor([unconditional_prefix], device=device),
+                uncon_image=torch.tensor([conditional_ids], device=device), generator=generator,
+            )
+            torch.cuda.synchronize(device)
+            seconds = time.perf_counter() - started
+            accuracies = token_accuracies(generated, source_codes, target_codes, edit_mask)
         prediction = decode_vq_to_image(generated, "unused.png", str(args.model), processed_size[1], processed_size[0], vqvae=vqvae)
         source_reconstruction = decode_vq_to_image((source_codes.flatten()[None] + IMAGE_TOKEN_OFFSET).to(device), "unused.png", str(args.model), processed_size[1], processed_size[0], vqvae=vqvae)
         target_reconstruction = decode_vq_to_image((target_codes.flatten()[None] + IMAGE_TOKEN_OFFSET).to(device), "unused.png", str(args.model), processed_size[1], processed_size[0], vqvae=vqvae)
+        oracle_image = decode_vq_to_image(oracle_with_offset, "unused.png", str(args.model), processed_size[1], processed_size[0], vqvae=vqvae)
         geometry = SharedGeometry(**row["geometry"])
         target = apply_shared_geometry(Image.open(row["target"]).convert("RGB"), geometry)
         if target.size != processed_size:
             raise AssertionError(f"processed target geometry {target.size} != payload {processed_size}")
         effective = effective_pixel_mask(edit_mask, prediction.size)
         metrics = pixel_metrics(_image_array(prediction), _image_array(target), _image_array(target_reconstruction), _image_array(source_reconstruction), effective)
+        oracle_metrics = pixel_metrics(_image_array(oracle_image), _image_array(target), _image_array(target_reconstruction), _image_array(source_reconstruction), effective)
         position = int(row["eval_index"])
         filename = f"{position:03d}.png"
         prediction.save(image_dir / filename)
         source_reconstruction.save(source_recon_dir / filename)
         target_reconstruction.save(target_recon_dir / filename)
+        oracle_image.save(oracle_dir / filename)
         record = {
             "model": args.model_label, "eval_index": position, "sample_key": row["sample_key"],
             "inference_seed": int(row["inference_seed"]), "instruction": row["instruction"],
             "token_height": token_height, "token_width": token_width,
             "processed_width": processed_size[0], "processed_height": processed_size[1],
-            "seconds": seconds, **accuracies, **metrics,
+            "seconds": seconds, "mask_ratio": float(edit_mask.float().mean()),
+            **accuracies, **metrics,
+            "oracle_metrics": oracle_metrics,
         }
         output_rows.append(record)
         print(json.dumps(record), flush=True)
     write_jsonl(args.output / "per_sample.jsonl", output_rows)
-    summary = {"model": args.model_label, **numeric_summary(output_rows)}
+    summary = {
+        "model": args.model_label,
+        **metric_summary(output_rows),
+        "mask_ratio_bins": mask_ratio_binned_summary(output_rows),
+    }
     (args.output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
 
 

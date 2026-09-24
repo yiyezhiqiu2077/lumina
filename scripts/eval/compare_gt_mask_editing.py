@@ -16,16 +16,19 @@ def main() -> None:
     rows = []
     for label, summary in args.model:
         payload = json.loads(Path(summary).read_text(encoding="utf-8"))
+        metrics = payload.get("metrics", payload)
+        mean = lambda key: metrics.get(key, {}).get("mean") if isinstance(metrics.get(key), dict) else metrics.get(key)
         rows.append({
             "Model": label,
-            "Edit Token Acc": payload.get("edit_token_accuracy"),
-            "Inside L1": payload.get("inside_l1_target"),
-            "Inside PSNR": payload.get("inside_psnr_target"),
-            "Inside L1 vs Target Recon": payload.get("inside_l1_target_recon"),
-            "Boundary L1": payload.get("boundary_l1_source_recon"),
-            "Full PSNR": payload.get("full_psnr_target"),
-            "Seconds / sample": payload.get("seconds"),
-            "Outside Token Acc": payload.get("outside_token_accuracy"),
+            "Source-copy Token Acc": mean("source_copy_token_accuracy"),
+            "Edit Token Acc": mean("edit_token_accuracy"),
+            "Changed-token Acc": mean("changed_token_accuracy"),
+            "Inside L1": mean("inside_l1_target"),
+            "Inside PSNR": mean("inside_psnr_target"),
+            "Inside L1 vs Target Recon": mean("inside_l1_target_recon"),
+            "Boundary L1": mean("boundary_l1_source_recon"),
+            "Full PSNR": mean("full_psnr_target"),
+            "Seconds / sample": mean("seconds"),
         })
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / "comparison.json").write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")

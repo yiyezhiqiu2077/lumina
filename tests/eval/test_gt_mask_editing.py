@@ -8,6 +8,10 @@ import torch
 from evaluation.gt_mask_editing import (
     boundary_ring,
     load_lora_recipe,
+    mask_ratio_binned_summary,
+    metric_summary,
+    oracle_codes,
+    oracle_token_accuracies,
     pixel_metrics,
     prepare_eval_subset,
     read_eval_subset,
@@ -58,7 +62,12 @@ def test_token_accuracy_and_hard_lock_assertion():
     mask = torch.tensor([[True, False], [False, True]])
     generated = torch.tensor([[126361, 126358, 126359, 126362]])
     metrics = token_accuracies(generated, source, target, mask)
-    assert metrics == {"edit_token_accuracy": 1.0, "outside_token_accuracy": 1.0}
+    assert metrics == {
+        "edit_token_accuracy": 1.0,
+        "source_copy_token_accuracy": 0.0,
+        "changed_token_accuracy": 1.0,
+        "outside_token_accuracy": 1.0,
+    }
     with pytest.raises(AssertionError, match="hard-lock violation"):
         token_accuracies(torch.tensor([[126361, 126399, 126359, 126362]]), source, target, mask)
 
@@ -124,3 +133,55 @@ def test_subset_preparation_only_writes_the_requested_subset(tmp_path):
     before = token.stat().st_mtime_ns
     prepare_eval_subset(manifest, tmp_path / "subset.jsonl", seed=42, limit=1)
     assert token.stat().st_mtime_ns == before
+
+
+@pytest.mark.parametrize("dataset_name", ("magicbrush", "refedit"))
+def test_subset_relocates_relative_token_paths_for_each_dataset(dataset_name, tmp_path):
+    original = tmp_path / "original"
+    token = original / "files" / "a.pt"
+    token.parent.mkdir(parents=True)
+    torch.save(_payload(torch.ones(2, 2, dtype=torch.bool)), token)
+    manifest = original / "manifest.jsonl"
+    manifest.write_text(json.dumps({
+        "sample_key": f"{dataset_name}-one", "dataset_name": dataset_name, "token_file": "files/a.pt",
+    }) + "\n", encoding="utf-8")
+    subset = tmp_path / "eval" / "subset.jsonl"
+    rows = prepare_eval_subset(manifest, subset, seed=42, limit=1)
+    assert resolve_token_file(rows[0], subset).resolve() == token.resolve()
+    assert rows[0]["token_file"] != "files/a.pt"
+
+
+def test_oracle_and_token_baselines_cover_changed_and_unchanged_tokens():
+    source = torch.tensor([[1, 2], [3, 4]])
+    target = torch.tensor([[5, 2], [3, 4]])
+    mask = torch.tensor([[True, True], [False, False]])
+    assert torch.equal(oracle_codes(source, target, mask), torch.tensor([[5, 2], [3, 4]]))
+    metrics = token_accuracies(torch.tensor([[126361, 126358, 126359, 126360]]), source, target, mask)
+    assert metrics["source_copy_token_accuracy"] == pytest.approx(0.5)
+    assert metrics["changed_token_accuracy"] == pytest.approx(1.0)
+    oracle_metrics = oracle_token_accuracies(source, target, mask)
+    assert oracle_metrics["edit_token_accuracy"] == 1.0
+    assert oracle_metrics["changed_token_accuracy"] == 1.0
+
+
+def test_empty_changed_token_accuracy_is_nan():
+    source = torch.tensor([[1, 2]])
+    mask = torch.tensor([[True, True]])
+    metrics = token_accuracies(torch.tensor([[126357, 126358]]), source, source, mask)
+    assert np.isnan(metrics["changed_token_accuracy"])
+
+
+def test_metric_summary_whitelist_and_mask_ratio_bins():
+    rows = [
+        {"eval_index": 99, "seed": 42, "mask_ratio": 0.05, "edit_token_accuracy": 0.5, "seconds": 1.0},
+        {"eval_index": 100, "seed": 43, "mask_ratio": 0.30, "edit_token_accuracy": 1.0, "seconds": 3.0},
+    ]
+    summary = metric_summary(rows)
+    assert set(summary) == {"samples", "metrics"}
+    assert summary["metrics"]["edit_token_accuracy"] == {
+        "count": 2, "mean": pytest.approx(0.75), "std": pytest.approx(0.25), "median": pytest.approx(0.75),
+    }
+    assert summary["metrics"]["inside_l1_target"]["count"] == 0
+    bins = mask_ratio_binned_summary(rows)
+    assert bins["0-10%"]["samples"] == 1
+    assert bins["25-50%"]["samples"] == 1

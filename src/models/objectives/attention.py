@@ -96,16 +96,20 @@ def layer_attention_auxiliary(
         conditional_map = (
             torch.einsum("hid,hjd->hij", instruction_q, source_k) / math.sqrt(q.shape[-1])
         ).softmax(dim=-1).mean(dim=(0, 1))
-        probability = conditional_map.float().clamp_min(eps)
+        # Keep P_G mathematically exact: it is a sum of the *raw* softmax
+        # probabilities.  The clamped view is only for operations involving
+        # log(p), where zero would otherwise be numerically problematic.
+        probability = conditional_map.float()
+        safe_probability = probability.clamp_min(eps)
         mask_count = source_edit.sum()
         probability_mass = (probability * source_edit).sum()
-        normalized_ce = -((source_edit / mask_count) * probability.log()).sum()
+        normalized_ce = -((source_edit / mask_count) * safe_probability.log()).sum()
         if mode == "normalized_mask_ce":
             losses.append(normalized_ce)
         else:
             losses.append(-probability_mass.clamp_min(eps).log())
         conditional_masses.append(probability_mass)
-        entropies.append(-(probability * probability.log()).sum())
+        entropies.append(-(probability * safe_probability.log()).sum())
         mask_entropy = mask_count.log()
         mask_entropies.append(mask_entropy)
         enrichments.append(probability_mass / (mask_count / source_edit.numel()))

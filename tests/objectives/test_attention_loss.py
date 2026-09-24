@@ -2,6 +2,7 @@ from types import MethodType, SimpleNamespace
 
 import torch
 from torch import nn
+import pytest
 
 from models.lumina import modeling_llada
 from models.lumina.modeling_llada import LLaDABlock
@@ -134,3 +135,23 @@ def test_region_mass_and_normalized_mask_ce_statistics():
     assert torch.allclose(normalized[6], torch.log(torch.tensor(2.0)))
     assert torch.allclose(normalized[7], normalized[0] - normalized[6])
     assert torch.allclose(region[0], -(region[1] + 1e-8).log())
+
+
+def test_region_mass_uses_exact_raw_probability_mass():
+    # q @ k gives equal source scores, so selecting one of two source tokens
+    # has P_G=0.5 exactly.  Selecting both has P_G=1 exactly.
+    q = torch.ones(1, 1, 2, 1, requires_grad=True)
+    k = torch.zeros(1, 1, 2, 1, requires_grad=True)
+    instruction = torch.tensor([[True, False]])
+    source = torch.tensor([[True, True]])
+    active = torch.tensor([True])
+    half = layer_attention_auxiliary(
+        q, k, instruction, source, torch.tensor([[True, False]]), active, mode="region_mass"
+    )
+    full = layer_attention_auxiliary(
+        q, k, instruction, source, torch.tensor([[True, True]]), active, mode="region_mass"
+    )
+    assert half[1].item() == pytest.approx(0.5, abs=1e-7)
+    assert half[0].item() == pytest.approx(-torch.log(torch.tensor(0.5)).item(), abs=1e-7)
+    assert full[1].item() == pytest.approx(1.0, abs=1e-7)
+    assert full[0].item() == pytest.approx(0.0, abs=1e-7)

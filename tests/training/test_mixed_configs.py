@@ -49,7 +49,7 @@ def test_mixed_attention_recipe_is_postrope_region_mass(mixed_environment):
     )
     assert args.attention_qk_stage == "post_rope"
     assert args.attention_loss_mode == "region_mass"
-    assert args.attention_loss_weight == pytest.approx(0.1)
+    assert args.attention_loss_weight == pytest.approx(0.3)
 
 
 @pytest.mark.parametrize(
@@ -67,3 +67,21 @@ def test_accumulation_one_diagnostic_configs_are_deliberately_global_batch_16(na
     assert args.max_steps == args.save_steps == 5
     assert args.scheduler_horizon_steps == 5190
     assert args.diagnostic_every_steps == args.gradient_decomposition_every_steps == 1
+
+
+@pytest.mark.parametrize(
+    ("name", "weight"),
+    (
+        ("mixed_attention_postrope_region_lambda03_4g_acc1_5step.yaml", 0.3),
+        ("mixed_attention_postrope_region_lambda05_4g_acc1_5step.yaml", 0.5),
+    ),
+)
+def test_attention_calibration_configs_only_vary_the_auxiliary_weight(name, weight, mixed_environment):
+    args = load_train_config(REPOSITORY / "configs/train/calibration" / name)
+    assert args.objective == "attention"
+    assert args.attention_qk_stage == "post_rope"
+    assert args.attention_loss_mode == "region_mass"
+    assert args.attention_loss_weight == pytest.approx(weight)
+    assert (args.nproc_per_node, args.batch_size, args.gradient_accumulation, args.global_batch_size) == (4, 4, 1, 16)
+    assert args.max_steps == args.save_steps == 5
+    assert args.scheduler_horizon_steps == 5190

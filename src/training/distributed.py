@@ -51,6 +51,16 @@ def reduce_max(value: torch.Tensor) -> torch.Tensor:
     return value
 
 
+def global_peak_memory_stats(device: torch.device) -> dict[str, torch.Tensor]:
+    """Return the maximum CUDA allocation/reservation over all DDP ranks."""
+    allocated = torch.tensor(torch.cuda.max_memory_allocated(device), device=device, dtype=torch.float64)
+    reserved = torch.tensor(torch.cuda.max_memory_reserved(device), device=device, dtype=torch.float64)
+    return {
+        "peak_allocated_gib": reduce_max(allocated) / (1024**3),
+        "peak_reserved_gib": reduce_max(reserved) / (1024**3),
+    }
+
+
 def named_gradient_norm(model, fragment: str, device: torch.device) -> torch.Tensor:
     squared = torch.zeros((), device=device)
     for name, parameter in model.named_parameters():
@@ -80,7 +90,8 @@ def parameter_group_norms(
 
 def gradient_decomposition(
     generation_loss: torch.Tensor,
-    auxiliary_loss: torch.Tensor,
+    raw_auxiliary_loss: torch.Tensor,
+    weighted_auxiliary_loss: torch.Tensor,
     parameters: list[torch.nn.Parameter],
     device: torch.device,
 ) -> dict[str, torch.Tensor]:
@@ -91,39 +102,58 @@ def gradient_decomposition(
         retain_graph=True,
         allow_unused=True,
     )
-    auxiliary_gradients = torch.autograd.grad(
-        auxiliary_loss,
+    raw_auxiliary_gradients = torch.autograd.grad(
+        raw_auxiliary_loss,
+        parameters,
+        retain_graph=True,
+        allow_unused=True,
+    )
+    weighted_auxiliary_gradients = torch.autograd.grad(
+        weighted_auxiliary_loss,
         parameters,
         retain_graph=True,
         allow_unused=True,
     )
     generation_squared = torch.zeros((), device=device)
-    auxiliary_squared = torch.zeros((), device=device)
+    raw_auxiliary_squared = torch.zeros((), device=device)
+    weighted_auxiliary_squared = torch.zeros((), device=device)
     dot = torch.zeros((), device=device)
     world_size = dist.get_world_size()
-    for generation_gradient, auxiliary_gradient in zip(
+    for generation_gradient, raw_auxiliary_gradient, weighted_auxiliary_gradient in zip(
         generation_gradients,
-        auxiliary_gradients,
+        raw_auxiliary_gradients,
+        weighted_auxiliary_gradients,
     ):
         if generation_gradient is not None:
             generation_gradient = generation_gradient.detach().float()
             dist.all_reduce(generation_gradient)
             generation_gradient /= world_size
             generation_squared += generation_gradient.pow(2).sum()
-        if auxiliary_gradient is not None:
-            auxiliary_gradient = auxiliary_gradient.detach().float()
-            dist.all_reduce(auxiliary_gradient)
-            auxiliary_gradient /= world_size
-            auxiliary_squared += auxiliary_gradient.pow(2).sum()
-        if generation_gradient is not None and auxiliary_gradient is not None:
-            dot += (generation_gradient * auxiliary_gradient).sum()
+        if raw_auxiliary_gradient is not None:
+            raw_auxiliary_gradient = raw_auxiliary_gradient.detach().float()
+            dist.all_reduce(raw_auxiliary_gradient)
+            raw_auxiliary_gradient /= world_size
+            raw_auxiliary_squared += raw_auxiliary_gradient.pow(2).sum()
+        if weighted_auxiliary_gradient is not None:
+            weighted_auxiliary_gradient = weighted_auxiliary_gradient.detach().float()
+            dist.all_reduce(weighted_auxiliary_gradient)
+            weighted_auxiliary_gradient /= world_size
+            weighted_auxiliary_squared += weighted_auxiliary_gradient.pow(2).sum()
+        if generation_gradient is not None and weighted_auxiliary_gradient is not None:
+            dot += (generation_gradient * weighted_auxiliary_gradient).sum()
     generation_norm = generation_squared.sqrt()
-    auxiliary_norm = auxiliary_squared.sqrt()
-    cosine = dot / (generation_norm * auxiliary_norm).clamp_min(1e-12)
+    raw_auxiliary_norm = raw_auxiliary_squared.sqrt()
+    weighted_auxiliary_norm = weighted_auxiliary_squared.sqrt()
+    cosine = dot / (generation_norm * weighted_auxiliary_norm).clamp_min(1e-12)
     return {
         "generation_gradient_norm": generation_norm,
-        "auxiliary_gradient_norm": auxiliary_norm,
-        "auxiliary_to_generation_gradient_ratio": auxiliary_norm / generation_norm.clamp_min(1e-12),
+        "raw_auxiliary_gradient_norm": raw_auxiliary_norm,
+        "weighted_auxiliary_gradient_norm": weighted_auxiliary_norm,
+        "raw_auxiliary_to_generation_gradient_ratio": raw_auxiliary_norm / generation_norm.clamp_min(1e-12),
+        "weighted_auxiliary_to_generation_gradient_ratio": weighted_auxiliary_norm / generation_norm.clamp_min(1e-12),
+        # Preserve the old names as aliases for downstream plotting tools.
+        "auxiliary_gradient_norm": weighted_auxiliary_norm,
+        "auxiliary_to_generation_gradient_ratio": weighted_auxiliary_norm / generation_norm.clamp_min(1e-12),
         "gradient_cosine": cosine,
     }
 
@@ -287,6 +317,7 @@ def run(args):
     local_rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
+    torch.cuda.reset_peak_memory_stats(device)
     runtime_dtype = torch.bfloat16
     seed_all(args.seed + rank)
     args.output.mkdir(parents=True, exist_ok=True)
@@ -539,6 +570,7 @@ def run(args):
                         weighted_auxiliary_loss = (
                             args.attention_loss_weight * attention_for_backward
                         )
+                        raw_auxiliary_loss = attention_for_backward
                         total_loss = compose_total_loss(
                             "attention",
                             generation_loss,
@@ -549,6 +581,7 @@ def run(args):
                         )
                     elif args.objective == "gce":
                         weighted_auxiliary_loss = args.gce_weight * result.gce_loss
+                        raw_auxiliary_loss = result.gce_loss
                         total_loss = compose_total_loss(
                             "gce",
                             generation_loss,
@@ -559,6 +592,7 @@ def run(args):
                         )
                     else:
                         weighted_auxiliary_loss = None
+                        raw_auxiliary_loss = None
                         total_loss = compose_total_loss(
                             "ce",
                             generation_loss,
@@ -573,6 +607,7 @@ def run(args):
                         )
                         decomposition = gradient_decomposition(
                             shared_generation_loss,
+                            raw_auxiliary_loss,
                             weighted_auxiliary_loss,
                             trainable,
                             device,
@@ -714,6 +749,7 @@ def run(args):
                         local_quality_error = str(error)
                 quality_error = _quality_failure_message(local_quality_error, device)
 
+                peak_memory = global_peak_memory_stats(device)
                 if rank == 0:
                     record = {
                         "step": step,
@@ -748,7 +784,8 @@ def run(args):
                         "lr": scheduler.get_last_lr()[0],
                         "seconds_per_step": (time.time() - start_time)
                         / max(step - resume_start_step, 1),
-                        "peak_vram_gib": torch.cuda.max_memory_allocated(device) / (1024**3),
+                        "peak_allocated_gib": peak_memory["peak_allocated_gib"].item(),
+                        "peak_reserved_gib": peak_memory["peak_reserved_gib"].item(),
                         **quality_metrics,
                     }
                     if args.objective == "attention":
