@@ -27,6 +27,12 @@ def main() -> None:
             "Inside PSNR": mean("inside_psnr_target"),
             "Inside L1 vs Target Recon": mean("inside_l1_target_recon"),
             "Boundary L1": mean("boundary_l1_source_recon"),
+            "ROI LPIPS": mean("roi_lpips"),
+            "ROI DINO-I": mean("roi_dino_i"),
+            "ROI CLIP-I": mean("roi_clip_i"),
+            "Full LPIPS": mean("full_lpips"),
+            "Full DINO-I": mean("full_dino_i"),
+            "Full CLIP-I": mean("full_clip_i"),
             "Full PSNR": mean("full_psnr_target"),
             "Seconds / sample": mean("seconds"),
         })

@@ -185,3 +185,21 @@ def test_metric_summary_whitelist_and_mask_ratio_bins():
     bins = mask_ratio_binned_summary(rows)
     assert bins["0-10%"]["samples"] == 1
     assert bins["25-50%"]["samples"] == 1
+
+
+def test_perceptual_metrics_are_summarized_and_binned():
+    row = {
+        "mask_ratio": 0.20,
+        "full_lpips": 0.4,
+        "roi_lpips": 0.3,
+        "full_dino_i": 0.8,
+        "roi_dino_i": 0.9,
+        "full_clip_i": 0.7,
+        "roi_clip_i": 0.85,
+    }
+    summary = metric_summary([row])
+    for key, value in row.items():
+        if key != "mask_ratio":
+            assert summary["metrics"][key]["mean"] == pytest.approx(value)
+    bins = mask_ratio_binned_summary([row])
+    assert bins["10-25%"]["metrics"]["roi_clip_i"]["count"] == 1

@@ -29,6 +29,12 @@ SUMMARY_METRICS = (
     "full_l1_target",
     "full_mse_target",
     "full_psnr_target",
+    "full_lpips",
+    "roi_lpips",
+    "full_dino_i",
+    "roi_dino_i",
+    "full_clip_i",
+    "roi_clip_i",
     "seconds",
 )
 MASK_RATIO_BINS = (

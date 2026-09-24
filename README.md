@@ -137,6 +137,9 @@ scripts/eval/evaluate_gt_mask_editing.py
 - Inside PSNR
 - Inside L1 vs Target Reconstruction
 - Oracle hard-lock diagnostic
+- ROI / Full LPIPS
+- ROI / Full DINO-I
+- ROI / Full CLIP-I
 
 详细评测协议见 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)。
 

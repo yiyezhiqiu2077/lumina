@@ -97,18 +97,43 @@ GT-mask hard-lock evaluator：
 uv run python scripts/eval/evaluate_gt_mask_editing.py --help
 ```
 
-当前实现的核心指标包括：
+Token：
 
 - Source-copy Token Accuracy
 - Edit Token Accuracy
 - Changed-token Accuracy
+
+Pixel：
+
 - Inside L1 / MSE / PSNR
-- Inside L1 vs Target Reconstruction
-- Boundary L1
 - Full L1 / MSE / PSNR
+- Boundary L1
+- Inside L1 vs Target Reconstruction
 - Oracle hard-lock diagnostic
 
-六组评测须使用相同 held-out samples、GT masks、timesteps、CFG 和 seeds。
+Perceptual / Semantic：
+
+- ROI LPIPS ↓ / Full LPIPS ↓
+- ROI DINO-I ↑ / Full DINO-I ↑
+- ROI CLIP-I ↑ / Full CLIP-I ↑
+
+ROI 是 GT-mask hard-lock 任务的主要 perceptual/semantic comparison；Full 指标作为完整图像参考。
+LPIPS 使用空间距离图在 GT mask 内取均值，DINO-I 与 CLIP-I 使用同一 GT-mask bounding box 加 10% context
+后的 prediction/target crop。所有模型必须使用本地权重。
+
+```bash
+uv sync --frozen --extra eval
+uv run python scripts/eval/evaluate_gt_mask_editing.py \
+  --manifest "$DATA_CONFIG" --subset /path/to/eval_subset.jsonl \
+  --model "$MODEL_PATH" --checkpoint /path/to/checkpoint-005190 \
+  --output /path/to/eval_output --model-label CE-full \
+  --lpips --lpips-net alex \
+  --dino-model /path/to/dino-model --clip-model /path/to/clip-model \
+  --roi-padding-ratio 0.10
+```
+
+六组评测须使用相同 held-out samples、GT masks、timesteps、CFG、seeds、DINO checkpoint、CLIP checkpoint、
+LPIPS backbone 和 ROI padding。
 
 ## 测试
 

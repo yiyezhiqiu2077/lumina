@@ -15,6 +15,12 @@ from transformers import AutoTokenizer
 
 from dataset.geometry import SharedGeometry, apply_shared_geometry
 from dataset.utils import write_jsonl
+from evaluation.perceptual_metrics import (
+    CLIPImageMetric,
+    DINOImageMetric,
+    LPIPSMetric,
+    image_similarity_metrics,
+)
 from evaluation.gt_mask_editing import (
     IMAGE_TOKEN_OFFSET,
     effective_pixel_mask,
@@ -53,6 +59,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cfg-img", type=float, default=4.0)
     parser.add_argument("--temperature", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--lpips", action="store_true", help="compute local pretrained LPIPS metrics")
+    parser.add_argument("--lpips-net", choices=("alex", "vgg", "squeeze"), default="alex")
+    parser.add_argument("--dino-model", type=Path, help="local Hugging Face DINO/DINOv2 image model")
+    parser.add_argument("--clip-model", type=Path, help="local Hugging Face CLIP image model")
+    parser.add_argument("--roi-padding-ratio", type=float, default=0.10)
     return parser.parse_args()
 
 
@@ -74,6 +85,17 @@ def _image_array(image: Image.Image) -> np.ndarray:
     return np.asarray(image.convert("RGB"), dtype=np.float32) / 255.0
 
 
+def _release_cuda() -> None:
+    """Release one evaluation stage before loading the next optional metric model."""
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def perceptual_metrics_requested(args: argparse.Namespace) -> bool:
+    """Keep the pre-existing evaluator path untouched unless a new metric is requested."""
+    return bool(args.lpips or args.dino_model is not None or args.clip_model is not None)
+
+
 def _load_model(model_path: Path, checkpoint: Path | None, device: torch.device):
     model = LLaDAForMultiModalGeneration.from_pretrained(
         model_path, torch_dtype=torch.bfloat16, local_files_only=True, low_cpu_mem_usage=True
@@ -88,6 +110,9 @@ def _load_model(model_path: Path, checkpoint: Path | None, device: torch.device)
 
 def main() -> None:
     args = parse_args()
+    if args.roi_padding_ratio < 0:
+        raise SystemExit("--roi-padding-ratio must be non-negative")
+    perceptual_requested = perceptual_metrics_requested(args)
     if args.prepare_subset_only:
         rows = prepare_eval_subset(args.manifest, args.subset, seed=args.seed, limit=args.limit)
         print(json.dumps({"subset": str(args.subset), "samples": len(rows), "seed": args.seed}, indent=2))
@@ -103,8 +128,13 @@ def main() -> None:
     image_dir = args.output / "images"
     source_recon_dir = args.output / "source_recon"
     target_recon_dir = args.output / "target_recon"
+    target_dir = args.output / "targets"
+    mask_dir = args.output / "effective_masks"
     oracle_dir = args.output / "oracle_hardlock"
-    for directory in (image_dir, source_recon_dir, target_recon_dir, oracle_dir):
+    directories = [image_dir, source_recon_dir, target_recon_dir, oracle_dir]
+    if perceptual_requested:
+        directories += [target_dir, mask_dir]
+    for directory in directories:
         directory.mkdir(exist_ok=True)
     (args.output / "eval_args.json").write_text(json.dumps(vars(args), indent=2, default=str) + "\n", encoding="utf-8")
     device = torch.device("cuda")
@@ -171,6 +201,9 @@ def main() -> None:
         prediction.save(image_dir / filename)
         source_reconstruction.save(source_recon_dir / filename)
         target_reconstruction.save(target_recon_dir / filename)
+        if perceptual_requested:
+            target.save(target_dir / filename)
+            Image.fromarray((effective.astype(np.uint8) * 255), mode="L").save(mask_dir / filename)
         oracle_image.save(oracle_dir / filename)
         record = {
             "model": args.model_label, "eval_index": position, "sample_key": row["sample_key"],
@@ -183,6 +216,53 @@ def main() -> None:
         }
         output_rows.append(record)
         print(json.dumps(record), flush=True)
+
+    # Persist the generation-stage diagnostics before freeing Lumina/VQ memory.
+    write_jsonl(args.output / "per_sample.jsonl", output_rows)
+    if perceptual_requested:
+        del model
+        del vqvae
+        del tokenizer
+        _release_cuda()
+
+        def image_inputs(record: dict) -> tuple[Image.Image, Image.Image, np.ndarray]:
+            filename = f"{int(record['eval_index']):03d}.png"
+            prediction = Image.open(image_dir / filename).convert("RGB")
+            target = Image.open(target_dir / filename).convert("RGB")
+            mask = np.asarray(Image.open(mask_dir / filename).convert("L"), dtype=np.uint8) > 0
+            return prediction, target, mask
+
+        if args.lpips:
+            metric = LPIPSMetric(net=args.lpips_net, device=device)
+            for record in output_rows:
+                prediction, target, mask = image_inputs(record)
+                record.update(metric.scores(prediction, target, mask))
+            del metric
+            _release_cuda()
+        if args.dino_model is not None:
+            metric = DINOImageMetric(args.dino_model, device=device)
+            for record in output_rows:
+                prediction, target, mask = image_inputs(record)
+                record.update(
+                    image_similarity_metrics(
+                        metric, prediction, target, mask, metric_name="dino_i", roi_padding_ratio=args.roi_padding_ratio
+                    )
+                )
+            del metric
+            _release_cuda()
+        if args.clip_model is not None:
+            metric = CLIPImageMetric(args.clip_model, device=device)
+            for record in output_rows:
+                prediction, target, mask = image_inputs(record)
+                record.update(
+                    image_similarity_metrics(
+                        metric, prediction, target, mask, metric_name="clip_i", roi_padding_ratio=args.roi_padding_ratio
+                    )
+                )
+            del metric
+            _release_cuda()
+
+    # Rewrite the same compatible output after optional metric stages finish.
     write_jsonl(args.output / "per_sample.jsonl", output_rows)
     summary = {
         "model": args.model_label,
