@@ -2,6 +2,7 @@ import copy
 
 import torch
 from torch import nn
+from torch.utils.checkpoint import checkpoint
 
 from training.lora import LoRALinear, inject_lora
 
@@ -39,3 +40,27 @@ def test_q_and_k_lora_receive_gradients():
     assert k.lora_b.weight.grad is not None
     assert torch.isfinite(q.lora_b.weight.grad).all()
     assert torch.isfinite(k.lora_b.weight.grad).all()
+
+
+def test_non_reentrant_checkpoint_preserves_lora_dropout_gradients():
+    torch.manual_seed(23)
+    plain = LoRALinear(nn.Linear(8, 8), rank=2, alpha=2, dropout=0.5)
+    checkpointed = copy.deepcopy(plain)
+    with torch.no_grad():
+        plain.lora_b.weight.normal_(0.0, 0.1)
+        checkpointed.lora_b.weight.copy_(plain.lora_b.weight)
+    inputs = torch.randn(3, 8, requires_grad=True)
+    checkpoint_inputs = inputs.detach().clone().requires_grad_(True)
+
+    torch.manual_seed(101)
+    plain(inputs).sum().backward()
+    torch.manual_seed(101)
+    checkpoint(
+        checkpointed,
+        checkpoint_inputs,
+        use_reentrant=False,
+        preserve_rng_state=True,
+    ).sum().backward()
+
+    assert torch.allclose(plain.lora_a.weight.grad, checkpointed.lora_a.weight.grad)
+    assert torch.allclose(plain.lora_b.weight.grad, checkpointed.lora_b.weight.grad)

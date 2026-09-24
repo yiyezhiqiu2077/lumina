@@ -52,6 +52,7 @@ def test_objective_plots_are_created(objective: str, tmp_path: Path):
 
 def test_rolling_mean_and_missing_metric_errors_are_clear(tmp_path: Path):
     assert PLOT.rolling_mean([1.0, 3.0, 5.0], 1).tolist() == [1.0, 3.0, 5.0]
+    assert PLOT.rolling_mean([1.0, 3.0, 5.0], 3).tolist() == [2.0, 3.0, 4.0]
     metrics = _write_metrics(tmp_path / "ce.jsonl", "ce")
     with pytest.raises(ValueError, match="missing metric"):
         PLOT.metric_values(PLOT.read_metrics(metrics), "gce_loss")

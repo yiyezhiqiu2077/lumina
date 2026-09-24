@@ -1,0 +1,4 @@
+name: MagicBrush+RefEdit
+token_manifest_default: mixed/train/manifest.jsonl
+vq_grid: [32, 32]
+corruption_seed: blake2b("{global_seed}\\0{epoch}\\0{sample_key}")

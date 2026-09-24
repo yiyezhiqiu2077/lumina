@@ -19,7 +19,7 @@ def _fake_tmux(tmp_path: Path) -> Path:
 set -euo pipefail
 case "$1" in
   has-session)
-    [[ "${FAKE_TMUX_ACTIVE:-}" == "$3" ]] && exit 0
+    [[ "${FAKE_TMUX_ACTIVE:-}" == "${3#=}" ]] && exit 0
     exit 1
     ;;
   new-session)
@@ -67,7 +67,7 @@ def _environment(tmp_path: Path) -> dict[str, str]:
         "MAGICBRUSH_DATA_CONFIG": str(manifest),
         "DATA_CONFIG": str(manifest),
         "GCE_CLUSTER_PATH": str(cluster),
-        "CUDA_VISIBLE_DEVICES": "0,1",
+        "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
         "FAKE_TMUX_RECORD": str(record),
     }
 
@@ -86,9 +86,9 @@ def _run(*arguments: str, environment: dict[str, str]) -> subprocess.CompletedPr
 @pytest.mark.parametrize(
     ("objective", "session", "config"),
     (
-        ("attention", "lumina_attn", "mb_attention_2g_b8_a2.yaml"),
-        ("gce", "lumina_gce", "mb_gce_2g_b8_a2.yaml"),
-        ("ce", "lumina_ce", "mb_ce_2g_b8_a2.yaml"),
+        ("attention", "lumina_attn", "mb_attention_8g_b4_a1.yaml"),
+        ("gce", "lumina_gce", "mb_gce_8g_b4_a1.yaml"),
+        ("ce", "lumina_ce", "mb_ce_8g_b4_a1.yaml"),
     ),
 )
 def test_objective_creates_snapshot_launcher(
@@ -98,12 +98,14 @@ def test_objective_creates_snapshot_launcher(
     result = _run(objective, environment=environment)
     assert result.returncode == 0, result.stderr
     assert f"session={session}" in result.stdout
-    assert "selected GPUs: 0,1" in result.stdout
+    assert "selected GPUs: 0,1,2,3,4,5,6,7" in result.stdout
     launcher = Path(environment["OUTPUT_ROOT"]) / "logs" / f"{objective}.command.sh"
     content = launcher.read_text(encoding="utf-8")
     assert subprocess.run(["bash", "-n", str(launcher)], check=False).returncode == 0
     assert "set -o pipefail" in content
     assert "TRAIN_STATUS=${PIPESTATUS[0]}" in content
+    assert "--require-succeeded" in content
+    assert "--mark-process-failed" in content
     assert "export PROJECT_ROOT=" in content
     assert "export CUDA_VISIBLE_DEVICES=0\\,1" in content
     assert config in content
@@ -157,10 +159,13 @@ def test_gce_requires_cluster_asset(tmp_path: Path):
     assert "GCE_CLUSTER_PATH" in result.stderr
 
 
-@pytest.mark.parametrize("artifact", ("train_metrics.jsonl", "experiment_config.json", "lora_report.json"))
+@pytest.mark.parametrize(
+    "artifact",
+    ("train_metrics.jsonl", "experiment_config.json", "lora_report.json", "quality_status.json"),
+)
 def test_fresh_run_rejects_existing_experiment_artifacts(tmp_path: Path, artifact: str):
     environment = _environment(tmp_path)
-    output = Path(environment["OUTPUT_ROOT"]) / "MB-ATTN-2G-B8-A2-S42"
+    output = Path(environment["OUTPUT_ROOT"]) / "MB-ATTN-8G-B4-A1-S42"
     output.mkdir(parents=True)
     (output / artifact).write_text("old run\n", encoding="utf-8")
     result = _run("attention", environment=environment)
@@ -171,18 +176,44 @@ def test_fresh_run_rejects_existing_experiment_artifacts(tmp_path: Path, artifac
 
 def test_fresh_run_rejects_existing_checkpoint(tmp_path: Path):
     environment = _environment(tmp_path)
-    checkpoint = Path(environment["OUTPUT_ROOT"]) / "MB-ATTN-2G-B8-A2-S42" / "checkpoint-001375"
+    checkpoint = Path(environment["OUTPUT_ROOT"]) / "MB-ATTN-8G-B4-A1-S42" / "checkpoint-001375"
     checkpoint.mkdir(parents=True)
     result = _run("attention", environment=environment)
     assert result.returncode != 0
     assert "existing experiment output detected" in result.stderr
 
 
+def test_fresh_run_rejects_existing_launcher_log(tmp_path: Path):
+    environment = _environment(tmp_path)
+    logs = Path(environment["OUTPUT_ROOT"]) / "logs"
+    logs.mkdir(parents=True)
+    (logs / "attention.log").write_text("old run\n", encoding="utf-8")
+    result = _run("attention", environment=environment)
+    assert result.returncode != 0
+    assert "existing experiment launcher artifact" in result.stderr
+
+
+def test_stale_running_marker_is_rejected(tmp_path: Path):
+    environment = _environment(tmp_path)
+    logs = Path(environment["OUTPUT_ROOT"]) / "logs"
+    logs.mkdir(parents=True)
+    (logs / "attention.running").touch()
+    result = _run("attention", environment=environment)
+    assert result.returncode != 0
+    assert "stale running marker" in result.stderr
+
+
 def test_valid_resume_is_accepted_and_stale_exit_code_is_removed(tmp_path: Path):
     environment = _environment(tmp_path)
-    output = Path(environment["OUTPUT_ROOT"]) / "MB-ATTN-2G-B8-A2-S42"
+    output = Path(environment["OUTPUT_ROOT"]) / "MB-ATTN-8G-B4-A1-S42"
     checkpoint = output / "checkpoint-001375"
     checkpoint.mkdir(parents=True)
+    (checkpoint / "_SUCCESS").write_text("complete\n", encoding="utf-8")
+    (checkpoint / "checkpoint_meta.json").write_text("{}\n", encoding="utf-8")
+    (checkpoint / "lora.pt").write_bytes(b"test")
+    for rank in range(8):
+        (checkpoint / f"training_state.rank{rank:02d}.pt").write_bytes(b"test")
+    (output / "train_metrics.jsonl").write_text("{}\n", encoding="utf-8")
     logs = Path(environment["OUTPUT_ROOT"]) / "logs"
     logs.mkdir(parents=True)
     stale_exit = logs / "attention.exit_code"
@@ -196,20 +227,29 @@ def test_valid_resume_is_accepted_and_stale_exit_code_is_removed(tmp_path: Path)
 
 def test_resume_must_belong_to_requested_objective_output(tmp_path: Path):
     environment = _environment(tmp_path)
-    (Path(environment["OUTPUT_ROOT"]) / "MB-ATTN-2G-B8-A2-S42").mkdir(parents=True)
-    checkpoint = Path(environment["OUTPUT_ROOT"]) / "MB-GCE-2G-B8-A2-S42" / "checkpoint-001375"
+    (Path(environment["OUTPUT_ROOT"]) / "MB-ATTN-8G-B4-A1-S42").mkdir(parents=True)
+    checkpoint = Path(environment["OUTPUT_ROOT"]) / "MB-GCE-8G-B4-A1-S42" / "checkpoint-001375"
     checkpoint.mkdir(parents=True)
     result = _run("attention", "--resume-from-checkpoint", str(checkpoint), environment=environment)
     assert result.returncode != 0
     assert "correct attention experiment directory" in result.stderr
 
 
-def test_one_gpu_is_rejected(tmp_path: Path):
+@pytest.mark.parametrize("devices", ("0", "0,1,2,3,4,5,6", "0,1,2,3,4,5,6,7,8"))
+def test_non_eight_gpu_selection_is_rejected(tmp_path: Path, devices: str):
     environment = _environment(tmp_path)
-    environment["CUDA_VISIBLE_DEVICES"] = "0"
+    environment["CUDA_VISIBLE_DEVICES"] = devices
     result = _run("attention", environment=environment)
     assert result.returncode != 0
-    assert "exactly 2 device IDs" in result.stderr
+    assert "exactly 8 device IDs" in result.stderr
+
+
+def test_duplicate_gpu_selection_is_rejected(tmp_path: Path):
+    environment = _environment(tmp_path)
+    environment["CUDA_VISIBLE_DEVICES"] = "0,1,2,3,4,5,6,6"
+    result = _run("attention", environment=environment)
+    assert result.returncode != 0
+    assert "8 distinct device IDs" in result.stderr
 
 
 def test_duplicate_and_other_active_sessions_are_rejected(tmp_path: Path):
@@ -224,6 +264,30 @@ def test_duplicate_and_other_active_sessions_are_rejected(tmp_path: Path):
     assert "another Lumina training session is already active" in other.stderr
 
 
+def test_similarly_prefixed_nontraining_session_is_not_a_conflict(tmp_path: Path):
+    environment = _environment(tmp_path)
+    environment["FAKE_TMUX_ACTIVE"] = "lumina_probe_progress"
+    result = _run("attention", environment=environment)
+    assert result.returncode == 0, result.stderr
+
+
+def test_all_creates_serial_queue_launcher(tmp_path: Path):
+    environment = _environment(tmp_path)
+    result = _run("all", environment=environment)
+    assert result.returncode == 0, result.stderr
+    assert "objectives=attention,gce,ce session=lumina_all" in result.stdout
+    launcher = Path(environment["OUTPUT_ROOT"]) / "logs" / "all.command.sh"
+    content = launcher.read_text(encoding="utf-8")
+    assert subprocess.run(["bash", "-n", str(launcher)], check=False).returncode == 0
+    attention = content.index("attention.command.sh")
+    gce = content.index("gce.command.sh")
+    ce = content.index("ce.command.sh")
+    assert attention < gce < ce
+    assert "exit \"$status\"" in content
+    record = Path(environment["FAKE_TMUX_RECORD"]).read_text(encoding="utf-8")
+    assert "-s\nlumina_all\n" in record
+
+
 def test_help_and_status_do_not_start_training(tmp_path: Path):
     environment = _environment(tmp_path)
     help_result = _run("help", environment=environment)
@@ -235,13 +299,24 @@ def test_help_and_status_do_not_start_training(tmp_path: Path):
     assert not Path(environment["FAKE_TMUX_RECORD"]).exists()
 
 
-def test_status_reports_finished_and_failed_exit_codes(tmp_path: Path):
+def test_status_reports_quality_and_process_outcomes(tmp_path: Path):
     environment = _environment(tmp_path)
-    logs = Path(environment["OUTPUT_ROOT"]) / "logs"
+    output_root = Path(environment["OUTPUT_ROOT"])
+    logs = output_root / "logs"
     logs.mkdir(parents=True)
     (logs / "attention.exit_code").write_text("0\n", encoding="utf-8")
+    attention = output_root / "MB-ATTN-8G-B4-A1-S42"
+    attention.mkdir()
+    (attention / "quality_status.json").write_text(
+        '{"status": "SUCCEEDED"}\n', encoding="utf-8"
+    )
     (logs / "gce.exit_code").write_text("7\n", encoding="utf-8")
+    gce = output_root / "MB-GCE-8G-B4-A1-S42"
+    gce.mkdir()
+    (gce / "quality_status.json").write_text(
+        '{"status": "QUALITY_FAILED"}\n', encoding="utf-8"
+    )
     result = _run("status", environment=environment)
     assert result.returncode == 0
-    assert "FINISHED exit_code=0" in result.stdout
-    assert "FAILED exit_code=7" in result.stdout
+    assert "SUCCEEDED exit_code=0 quality=SUCCEEDED" in result.stdout
+    assert "QUALITY_FAILED exit_code=7" in result.stdout

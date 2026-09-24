@@ -43,7 +43,7 @@ def test_whole_layer_checkpoint_returns_one_auxiliary_per_layer_with_gradients()
         source_edit_mask=edit,
         attention_active=torch.tensor([True]),
     )
-    assert output.attention_auxiliary.shape == (2, 5)
+    assert output.attention_auxiliary.shape == (2, 8)
     assert output.attention_auxiliary[:, 4].tolist() == [1.0, 1.0]
     output.attention_auxiliary[:, 0].mean().backward()
     for block in model.model.transformer.blocks:

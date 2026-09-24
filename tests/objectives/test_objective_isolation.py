@@ -47,8 +47,9 @@ def test_attention_does_not_call_gce_and_uses_expected_sum(monkeypatch):
 
 def test_gce_does_not_request_attention_and_uses_expected_sum():
     class FakeGCE:
-        def __call__(self, logits, labels):
+        def __call__(self, logits, labels, reduction):
             assert logits.shape[-1] == 4 and labels.shape == (1, 1)
+            assert reduction == "sample_mean"
             return torch.tensor(5.0, requires_grad=True), {"gce_loss": torch.tensor(5.0)}
 
     model = FakeModel()
@@ -56,6 +57,20 @@ def test_gce_does_not_request_attention_and_uses_expected_sum():
     total = compose_total_loss("gce", result.output.generation_loss, gce_loss=result.gce_loss, gce_weight=1.0)
     assert torch.allclose(total, torch.tensor(8.0))
     assert "attention_supervision_layers" not in model.calls[0]
+
+
+def test_z_loss_is_shared_without_changing_objective_isolation():
+    generation = torch.tensor(3.0)
+    z_loss = torch.tensor(7.0)
+    total = compose_total_loss(
+        "ce",
+        generation,
+        generation_z_loss=z_loss,
+        z_loss_weight=1e-5,
+    )
+    assert torch.allclose(total, generation + 7e-5)
+    with pytest.raises(ValueError, match="generation_z_loss"):
+        compose_total_loss("ce", generation, z_loss_weight=1e-5)
 
 
 def test_invalid_or_mixed_objective_is_rejected():

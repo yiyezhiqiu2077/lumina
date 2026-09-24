@@ -70,12 +70,18 @@ def layer_attention_auxiliary(
     source_spatial_masks: torch.Tensor,
     source_edit_masks: torch.Tensor,
     active: torch.Tensor,
+    mode: str = "normalized_mask_ce",
     eps: float = 1e-8,
 ) -> torch.Tensor:
+    if mode not in {"normalized_mask_ce", "region_mass"}:
+        raise ValueError(f"unsupported attention loss mode: {mode}")
     losses = []
     conditional_masses = []
     entropies = []
     full_masses = []
+    enrichments = []
+    mask_entropies = []
+    effective_kls = []
     expanded_k = expand_grouped_keys(k, q.shape[1])
     for sample in range(q.shape[0]):
         if not bool(active[sample]):
@@ -90,11 +96,24 @@ def layer_attention_auxiliary(
         conditional_map = (
             torch.einsum("hid,hjd->hij", instruction_q, source_k) / math.sqrt(q.shape[-1])
         ).softmax(dim=-1).mean(dim=(0, 1))
-        target = source_edit / source_edit.sum()
-        probability = conditional_map.float().clamp_min(eps)
-        losses.append(-(target * probability.log()).sum())
-        conditional_masses.append((probability * source_edit).sum())
-        entropies.append(-(probability * probability.log()).sum())
+        # Keep P_G mathematically exact: it is a sum of the *raw* softmax
+        # probabilities.  The clamped view is only for operations involving
+        # log(p), where zero would otherwise be numerically problematic.
+        probability = conditional_map.float()
+        safe_probability = probability.clamp_min(eps)
+        mask_count = source_edit.sum()
+        probability_mass = (probability * source_edit).sum()
+        normalized_ce = -((source_edit / mask_count) * safe_probability.log()).sum()
+        if mode == "normalized_mask_ce":
+            losses.append(normalized_ce)
+        else:
+            losses.append(-probability_mass.clamp_min(eps).log())
+        conditional_masses.append(probability_mass)
+        entropies.append(-(probability * safe_probability.log()).sum())
+        mask_entropy = mask_count.log()
+        mask_entropies.append(mask_entropy)
+        enrichments.append(probability_mass / (mask_count / source_edit.numel()))
+        effective_kls.append(normalized_ce - mask_entropy)
 
         full_k = expanded_k[sample].float()
         full_probability = (
@@ -110,7 +129,10 @@ def layer_attention_auxiliary(
                 torch.stack(entropies).mean().detach(),
                 torch.stack(full_masses).mean().detach(),
                 q.new_tensor(float(len(losses))),
+                torch.stack(enrichments).mean().detach(),
+                torch.stack(mask_entropies).mean().detach(),
+                torch.stack(effective_kls).mean().detach(),
             ]
         )
     zero = q.sum() * 0.0
-    return torch.stack([zero, zero, zero, zero, zero])
+    return torch.stack([zero, zero, zero, zero, zero, zero, zero, zero])
