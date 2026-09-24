@@ -92,6 +92,8 @@ def validate_train_config(args: argparse.Namespace) -> None:
         raise ValueError("attention_qk_stage must be pre_rope or post_rope")
     if getattr(args, "attention_loss_mode", "normalized_mask_ce") not in ("normalized_mask_ce", "region_mass"):
         raise ValueError("attention_loss_mode must be normalized_mask_ce or region_mass")
+    if getattr(args, "target_corruption_mode", "full_target") not in ("full_target", "edit_region_hardlock"):
+        raise ValueError("target_corruption.mode must be full_target or edit_region_hardlock")
     scheduler_horizon_steps = getattr(args, "scheduler_horizon_steps", args.max_steps)
     if scheduler_horizon_steps < args.max_steps:
         raise ValueError(
@@ -208,6 +210,7 @@ def load_train_config(config_path: Path, resume_from_checkpoint: Path | None = N
         quality_max_abs_logit=float(quality_gate.get("max_abs_logit", 1.0e4)),
         quality_max_update_ratio=float(quality_gate.get("max_update_ratio", 0.25)),
         condition_dropout=config.get("condition_dropout", 0.1), max_seq_len=config["data"]["max_seq_len"],
+        target_corruption_mode=config.get("target_corruption", {}).get("mode", "full_target"),
         seed=config["seed"], num_workers=config.get("num_workers", 4), resume_from_checkpoint=resume_from_checkpoint,
         attention_layers=[], attention_loss_weight=0.1, attention_qk_stage="post_rope",
         attention_loss_mode="normalized_mask_ce", gce_clusters=None, gce_weight=1.0, gce_levels=[1024, 512],
@@ -251,4 +254,5 @@ def launch_summary(args: argparse.Namespace) -> dict:
         "dataset_sample_count": args.dataset_sample_count,
         "optimizer_steps_per_epoch": args.optimizer_steps_per_epoch,
         "epochs": args.epochs,
+        "target_corruption_mode": args.target_corruption_mode,
     }

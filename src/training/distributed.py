@@ -318,6 +318,18 @@ def run(args):
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
     torch.cuda.reset_peak_memory_stats(device)
+    corruption_fields = (
+        "sample_count",
+        "edit_token_count",
+        "edit_fraction",
+        "masked_edit_token_count",
+        "masked_edit_fraction",
+        "valid_target_count",
+    )
+    corruption_sums = {
+        group: {field: torch.zeros((), device=device) for field in corruption_fields}
+        for group in ("overall", "magicbrush", "refedit")
+    }
     runtime_dtype = torch.bfloat16
     seed_all(args.seed + rank)
     args.output.mkdir(parents=True, exist_ok=True)
@@ -379,6 +391,7 @@ def run(args):
         max_sequence_length=args.max_seq_len,
         condition_dropout=args.condition_dropout,
         seed=args.seed,
+        target_corruption_mode=args.target_corruption_mode,
     )
     dataset_composition = Counter(
         str(row.get("dataset_name", "magicbrush")) for row in dataset.rows
@@ -623,6 +636,26 @@ def run(args):
                 sums["L_z_raw"] += generation_z_loss.detach().float()
                 sums["L_total"] += total_loss.detach().float()
                 sums["valid_target_count"] += result.output.valid_target_count.detach().float()
+                for row in rows:
+                    dataset_name = str(row.get("dataset_name", "magicbrush")).lower()
+                    groups = ["overall"] + ([dataset_name] if dataset_name in corruption_sums else [])
+                    masked_count = row.get("masked_edit_token_count")
+                    if masked_count is None:
+                        masked_count = row["valid_target_label_count"]
+                    masked_fraction = row.get("masked_edit_fraction")
+                    if masked_fraction is None:
+                        masked_fraction = masked_count / max(row["target_spatial_count"], 1)
+                    values = {
+                        "sample_count": 1.0,
+                        "edit_token_count": float(row["edit_token_count"]),
+                        "edit_fraction": float(row["edit_fraction"]),
+                        "masked_edit_token_count": float(masked_count),
+                        "masked_edit_fraction": float(masked_fraction),
+                        "valid_target_count": float(row["valid_target_label_count"]),
+                    }
+                    for group in groups:
+                        for key, value in values.items():
+                            corruption_sums[group][key] += value
                 sums["max_abs_logit"] = torch.maximum(
                     sums["max_abs_logit"],
                     result.output.max_abs_valid_logit.detach().float(),
@@ -700,6 +733,19 @@ def run(args):
                         value /= world_size * args.gradient_accumulation
                 for value in sums.values():
                     value.zero_()
+                global_corruption = {}
+                for group, local_values in corruption_sums.items():
+                    values = {key: value.clone() for key, value in local_values.items()}
+                    for value in values.values():
+                        dist.all_reduce(value)
+                    count = values.pop("sample_count")
+                    global_corruption[group] = {
+                        key: (value / count.clamp_min(1.0)).item()
+                        for key, value in values.items()
+                    }
+                    global_corruption[group]["sample_count"] = int(count.item())
+                    for value in local_values.values():
+                        value.zero_()
                 if layer_sums is not None:
                     layers = layer_sums.clone()
                     dist.all_reduce(layers)
@@ -756,6 +802,8 @@ def run(args):
                         **{key: value.item() for key, value in metrics.items()},
                         "weighted_z_loss": args.z_loss_weight * metrics["L_z_raw"].item(),
                         "objective": args.objective,
+                        "target_corruption_mode": args.target_corruption_mode,
+                        "corruption_diagnostics": global_corruption,
                         "grad_norm": global_pre_clip_grad_norm.item(),
                         "pre_clip_grad_norm": global_pre_clip_grad_norm.item(),
                         "post_clip_grad_norm": global_post_clip_grad_norm.item(),

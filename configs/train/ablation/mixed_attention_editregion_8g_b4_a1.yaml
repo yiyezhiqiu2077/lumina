@@ -1,5 +1,5 @@
-experiment_name: MIXED-ATTN-POSTROPE-REGION-8G-B4-A1-S42
-output_name: MIXED-ATTN-POSTROPE-REGION-8G-B4-A1-S42
+experiment_name: MIXED-ATTN-POSTROPE-REGION-EDITREGION-8G-B4-A1-S42
+output_name: MIXED-ATTN-POSTROPE-REGION-EDITREGION-8G-B4-A1-S42
 objective: {mode: attention}
 seed: 42
 condition_dropout: 0.1
@@ -7,7 +7,7 @@ dataset_config: configs/dataset/mixed_edit.yaml
 distributed_config: configs/distributed/single_node.yaml
 paths: {model_env: MODEL_PATH, data_root_env: DATA_ROOT, train_manifest_env: DATA_CONFIG, output_root_env: OUTPUT_ROOT}
 data: {max_seq_len: 5120}
-target_corruption: {mode: full_target}
+target_corruption: {mode: edit_region_hardlock}
 training: {precision: bf16, batch_size_per_gpu: 4, gradient_accumulation: 1, epochs: 10, max_optimizer_steps: auto, scheduler_horizon_steps: auto, checkpoint_every_steps: epoch_auto}
 optimization: {optimizer: AdamW, learning_rate: 3.0e-6, betas: [0.9, 0.95], weight_decay: 0.1, clip_grad_norm: 4.0, warmup_steps: 20, loss_reduction: token_mean, z_loss_weight: 1.0e-5}
 lora: {rank: 16, alpha: 16.0, dropout: 0.05, targets: [q_proj, k_proj, v_proj, attn_out]}

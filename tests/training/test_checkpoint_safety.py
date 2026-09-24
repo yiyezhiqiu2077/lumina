@@ -94,6 +94,14 @@ def test_fingerprint_distinguishes_stop_and_scheduler_horizons(tmp_path):
     assert build_run_fingerprint(compressed, 8)["digest"] != probe_fingerprint["digest"]
 
 
+def test_fingerprint_distinguishes_target_corruption_modes(tmp_path):
+    full = _args(tmp_path / "full")
+    full.target_corruption_mode = "full_target"
+    edit = Namespace(**vars(full))
+    edit.target_corruption_mode = "edit_region_hardlock"
+    assert build_run_fingerprint(full, 8)["digest"] != build_run_fingerprint(edit, 8)["digest"]
+
+
 def test_metrics_continuity_requires_exact_prefix(tmp_path):
     metrics = tmp_path / "train_metrics.jsonl"
     metrics.write_text(

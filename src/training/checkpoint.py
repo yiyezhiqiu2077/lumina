@@ -136,6 +136,12 @@ def build_run_fingerprint(args, world_size: int) -> dict[str, Any]:
             "seed": args.seed,
             "condition_dropout": args.condition_dropout,
             "max_seq_len": args.max_seq_len,
+            "target_corruption": {
+                "mode": getattr(args, "target_corruption_mode", "full_target"),
+                "schedule": "cosine_random_ratio",
+                "minimum_masked_tokens": 1,
+                "candidate_policy": getattr(args, "target_corruption_mode", "full_target"),
+            },
             "cursor_strategy": "global_step_times_gradient_accumulation",
             "sampler": "DistributedSampler(drop_last=True)",
             "sample_count": getattr(args, "dataset_sample_count", None),
