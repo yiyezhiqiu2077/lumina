@@ -4,8 +4,7 @@
 CE / Attention / GCE 三种训练目标，以及 `full_target` / `edit_region_hardlock` 两种 target
 corruption。提供数据处理、LoRA 微调、DDP、checkpoint 和 GT-mask 评测流程。
 
-详细实验设计见 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)，历史过程见
-[docs/EXPERIMENT_PROGRESS.md](docs/EXPERIMENT_PROGRESS.md)。
+详细实验设计见 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)。
 
 ## 项目结构
 
@@ -106,34 +105,20 @@ Attention 使用 post-RoPE Q/K + region-mass supervision；详细定义见
 
 ## 训练
 
-统一入口：
+六组正式训练入口：
 
 ```bash
-uv run python scripts/train/train.py --config <CONFIG>
+bash scripts/train/run_mixed_2x3_formal.sh --print-command
+bash scripts/train/run_mixed_2x3_formal.sh --run
 ```
 
-4-GPU correctness：
-
-```bash
-bash scripts/train/run_mixed_smokes.sh full --run
-bash scripts/train/run_mixed_smokes.sh editregion --run
-```
-
-4-GPU smoke 只用于 correctness，不用于科学结论。
-
-8-GPU formal：
-
-```bash
-bash scripts/train/run_mixed_formal.sh <CONFIG> --run
-```
-
-具体 CLI 以实际脚本为准。旧的 Smoke → 1650 probe → 2750 formal 属于 Historical
-MagicBrush-only v3，不是当前 mixed workflow。
+脚本按 CE full → CE editregion → Attention full → Attention editregion → GCE full → GCE editregion
+串行执行，并在每组结束后检查 quality、metrics 和最终 checkpoint。
 
 ## 分布式训练
 
-Single-node Multi-GPU DDP：当前正式 topology 为 `1 node × 8 GPUs`；当前 correctness 为
-`1 node × 4 GPUs`。数据加载使用 `DistributedSampler`，训练使用 PyTorch DDP。
+Single-node Multi-GPU DDP：当前正式 topology 为 `1 node × 8 GPUs`。数据加载使用
+`DistributedSampler`，训练使用 PyTorch DDP。
 
 ## 评测
 
@@ -166,4 +151,3 @@ uv run pytest -q
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)
 - [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)：当前 mixed 2×3 workflow
-- [docs/EXPERIMENT_PROGRESS.md](docs/EXPERIMENT_PROGRESS.md)：Historical MagicBrush-only v3 实验记录
