@@ -84,7 +84,7 @@ Full LPIPS 为 canonical `LPIPS(alex, spatial=False)`；ROI LPIPS 为 `spatial=T
 uv run python scripts/tools/package_formal_results.py --train-root "$OUTPUT_ROOT" --eval-root "$EVAL_OUTPUT_ROOT" --formal-assets "$ASSET_ROOT/artifacts/formal_assets.json" --output "$ASSET_ROOT/archives/lumina_mixed_2x3_results.tar.gz"
 ```
 
-仅白名单配置、provenance、quality、summary、gzip JSONL、comparison 和 manifest；checkpoint、weights、token、raw data、images、cache 均排除。超过 50 MiB 明确失败。
+checkpoint、weights、token、raw data、images、cache 均排除。超过 50 MiB 明确失败。
 
 ## 测试
 
