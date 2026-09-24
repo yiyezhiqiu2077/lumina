@@ -42,9 +42,12 @@ PY
 ```text
 local_assets/
 ├── models/
-│   └── Lumina-DiMOO
+│   ├── Lumina-DiMOO
+│   ├── dinov2-base/
+│   └── clip-vit-large-patch14/
 ├── datasets/
 │   ├── magicbrush/
+│   ├── magicbrush-test/
 │   ├── refedit/
 │   └── mixed/
 └── experiments/
@@ -53,8 +56,11 @@ local_assets/
 ```bash
 bash scripts/setup_local_assets.sh model /path/to/Lumina-DiMOO
 bash scripts/setup_local_assets.sh magicbrush /path/to/magicbrush-token-root
+bash scripts/setup_local_assets.sh magicbrush-test /path/to/MagicBrush-test
 bash scripts/setup_local_assets.sh refedit /path/to/refedit-root
 bash scripts/setup_local_assets.sh mixed /path/to/mixed-token-root
+bash scripts/setup_local_assets.sh dino /path/to/dinov2-base
+bash scripts/setup_local_assets.sh clip /path/to/clip-vit-large-patch14
 ```
 
 数据流程为 MagicBrush + RefEdit → shared preprocessing → VQ pre-tokenization → mixed manifest →
@@ -140,6 +146,13 @@ scripts/eval/evaluate_gt_mask_editing.py
 - ROI / Full LPIPS
 - ROI / Full DINO-I
 - ROI / Full CLIP-I
+
+正式评测固定使用官方 MagicBrush TEST token manifest，不使用 mixed training manifest：
+
+```bash
+bash scripts/eval/run_mixed_2x3_eval.sh --print-command
+bash scripts/eval/run_mixed_2x3_eval.sh --run
+```
 
 详细评测协议见 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)。
 

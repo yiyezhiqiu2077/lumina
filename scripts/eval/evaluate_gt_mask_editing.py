@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", type=Path, required=True, help="held-out token manifest")
     parser.add_argument("--subset", type=Path, required=True, help="persisted fixed eval_subset.jsonl")
     parser.add_argument("--prepare-subset-only", action="store_true")
-    parser.add_argument("--limit", type=int, default=8)
+    parser.add_argument("--limit", type=int, default=0, help="0 evaluates the entire frozen subset; positive values are smoke/debug limits")
     parser.add_argument("--model", type=Path)
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--output", type=Path)
@@ -122,7 +122,9 @@ def main() -> None:
     if args.oracle_only and args.checkpoint is not None:
         raise SystemExit("--oracle-only cannot be combined with --checkpoint")
     rows = read_eval_subset(args.subset)
-    if len(rows) > args.limit:
+    if args.limit < 0:
+        raise ValueError("--limit must be 0 (all subset rows) or a positive integer")
+    if args.limit > 0 and len(rows) > args.limit:
         raise ValueError(f"fixed subset has {len(rows)} rows, limit={args.limit}")
     args.output.mkdir(parents=True, exist_ok=True)
     image_dir = args.output / "images"

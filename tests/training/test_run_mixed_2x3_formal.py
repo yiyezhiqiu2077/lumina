@@ -85,6 +85,9 @@ PY
     clean_git = tmp_path / "clean_git.sh"
     clean_git.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
     clean_git.chmod(0o755)
+    audit = tmp_path / "fake_audit.sh"
+    audit.write_text("#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' audit >> \"$FAKE_CALLS\"\n", encoding="utf-8")
+    audit.chmod(0o755)
     environment = dict(os.environ)
     environment.update(
         {
@@ -96,6 +99,7 @@ PY
             "CUDA_VISIBLE_DEVICES": "0,1,2,3,4,5,6,7",
             "MIXED_2X3_FORMAL_LAUNCHER": str(fake),
             "MIXED_2X3_GIT_BIN": str(clean_git),
+            "MIXED_2X3_ASSET_AUDIT": str(audit),
             "FAKE_CALLS": str(calls),
             "FAKE_OUTPUTS": json.dumps(OUTPUTS),
         }
@@ -140,7 +144,7 @@ def test_all_configs_are_preflighted_before_first_run(formal_environment):
     environment, calls = formal_environment
     result = run_launcher(environment, "--run")
     assert result.returncode == 0, result.stderr
-    assert called(calls) == [(name, "--print-command") for name in ORDER] + [(name, "--run") for name in ORDER]
+    assert called(calls) == [("audit",)] + [(name, "--print-command") for name in ORDER] + [(name, "--run") for name in ORDER]
 
 
 @pytest.mark.parametrize(
@@ -159,7 +163,7 @@ def test_run_stops_after_process_or_success_gate_failure(formal_environment, sce
     result = run_launcher(environment, "--run")
     assert result.returncode != 0
     assert needle in (Path(environment["OUTPUT_ROOT"]) / "2x3_formal_pipeline.log").read_text(encoding="utf-8")
-    assert called(calls) == [(name, "--print-command") for name in ORDER] + [(ORDER[0], "--run")]
+    assert called(calls) == [("audit",)] + [(name, "--print-command") for name in ORDER] + [(ORDER[0], "--run")]
 
 
 def test_existing_output_fails_before_any_child_launcher(formal_environment):
@@ -179,6 +183,17 @@ def test_missing_gce_asset_fails_before_any_child_launcher(formal_environment):
     result = run_launcher(environment, "--run")
     assert result.returncode != 0
     assert "GCE_CLUSTER_PATH" in result.stderr
+    assert called(calls) == []
+
+
+def test_formal_asset_audit_failure_stops_before_any_child_launcher(formal_environment, tmp_path):
+    environment, calls = formal_environment
+    failing_audit = tmp_path / "failing_audit.sh"
+    failing_audit.write_text("#!/usr/bin/env bash\nexit 17\n", encoding="utf-8")
+    failing_audit.chmod(0o755)
+    environment["MIXED_2X3_ASSET_AUDIT"] = str(failing_audit)
+    result = run_launcher(environment, "--run")
+    assert result.returncode != 0
     assert called(calls) == []
 
 

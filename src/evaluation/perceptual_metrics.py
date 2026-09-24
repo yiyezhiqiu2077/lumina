@@ -80,6 +80,12 @@ def spatial_lpips_masked_mean(spatial_map: torch.Tensor, mask: np.ndarray) -> fl
     return float(values[0, 0][resized].mean().item())
 
 
+def lpips_scores_from_spatial_map(spatial_map: torch.Tensor, mask: np.ndarray) -> dict[str, float]:
+    """Keep canonical full LPIPS separate from the ROI spatial masked mean."""
+    values = torch.as_tensor(spatial_map).float()
+    return {"full_lpips": float(values.mean().item()), "roi_lpips": spatial_lpips_masked_mean(values, mask)}
+
+
 def _image_tensor(image: Image.Image, device: torch.device) -> torch.Tensor:
     values = torch.from_numpy(np.asarray(image.convert("RGB"), dtype=np.float32).copy())
     return values.permute(2, 0, 1).unsqueeze(0).to(device) / 127.5 - 1.0
@@ -122,10 +128,7 @@ class LPIPSMetric:
     @torch.inference_mode()
     def scores(self, prediction: Image.Image, target: Image.Image, mask: np.ndarray) -> dict[str, float]:
         values = self.model(_image_tensor(prediction, self.device), _image_tensor(target, self.device))
-        return {
-            "full_lpips": float(values.mean().item()),
-            "roi_lpips": spatial_lpips_masked_mean(values, mask),
-        }
+        return lpips_scores_from_spatial_map(values, mask)
 
 
 class DINOImageMetric:

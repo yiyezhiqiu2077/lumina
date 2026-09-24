@@ -85,9 +85,11 @@ def prepare_eval_subset(manifest: Path, subset: Path, *, seed: int, limit: int) 
                 source_token_path.resolve(), subset.parent.resolve()
             )
             eligible.append(portable_row)
-    if len(eligible) < limit:
+    if limit < 0:
+        raise ValueError("limit must be 0 (all eligible samples) or a positive integer")
+    if limit > 0 and len(eligible) < limit:
         raise ValueError(f"only {len(eligible)} non-empty-mask samples, need {limit}")
-    selected = random.Random(seed).sample(eligible, limit)
+    selected = eligible if limit == 0 else random.Random(seed).sample(eligible, limit)
     output = []
     for eval_index, row in enumerate(selected):
         row = dict(row)

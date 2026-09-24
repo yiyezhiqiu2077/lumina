@@ -7,8 +7,11 @@ usage() {
 Usage:
   bash scripts/setup_local_assets.sh model <existing-model-dir>
   bash scripts/setup_local_assets.sh magicbrush <existing-magicbrush-dir>
+  bash scripts/setup_local_assets.sh magicbrush-test <existing-magicbrush-test-dir>
   bash scripts/setup_local_assets.sh refedit <existing-refedit-dir>
   bash scripts/setup_local_assets.sh mixed <existing-mixed-token-dir>
+  bash scripts/setup_local_assets.sh dino <existing-dinov2-base-dir>
+  bash scripts/setup_local_assets.sh clip <existing-clip-vit-large-patch14-dir>
   bash scripts/setup_local_assets.sh experiments <existing-experiment-dir>
 
 The target must already exist.  This script only replaces the corresponding
@@ -22,8 +25,11 @@ target="$2"
 case "$kind" in
     model) link='local_assets/models/Lumina-DiMOO' ;;
     magicbrush) link='local_assets/datasets/magicbrush' ;;
+    magicbrush-test) link='local_assets/datasets/magicbrush-test' ;;
     refedit) link='local_assets/datasets/refedit' ;;
     mixed) link='local_assets/datasets/mixed' ;;
+    dino) link='local_assets/models/dinov2-base' ;;
+    clip) link='local_assets/models/clip-vit-large-patch14' ;;
     experiments) link='local_assets/experiments' ;;
     *) usage >&2; exit 2 ;;
 esac

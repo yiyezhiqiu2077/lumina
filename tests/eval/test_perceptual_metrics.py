@@ -8,6 +8,7 @@ import torch
 from evaluation.perceptual_metrics import (
     cosine_similarity,
     image_similarity_metrics,
+    lpips_scores_from_spatial_map,
     mask_bbox,
     padded_mask_bbox,
     paired_roi_crops,
@@ -42,6 +43,13 @@ def test_cosine_and_spatial_lpips_roi_mean_are_correct():
     spatial = torch.tensor([[[[1.0, 2.0], [3.0, 4.0]]]])
     mask = np.array([[False, True], [True, False]])
     assert spatial_lpips_masked_mean(spatial, mask) == pytest.approx(2.5)
+    assert lpips_scores_from_spatial_map(spatial, mask) == {"full_lpips": pytest.approx(2.5), "roi_lpips": pytest.approx(2.5)}
+
+
+def test_full_lpips_and_roi_lpips_use_distinct_reductions():
+    spatial = torch.tensor([[[[1.0, 5.0], [9.0, 13.0]]]])
+    mask = np.array([[True, False], [False, False]])
+    assert lpips_scores_from_spatial_map(spatial, mask) == {"full_lpips": pytest.approx(7.0), "roi_lpips": pytest.approx(1.0)}
 
 
 def test_empty_masks_fail_clearly():

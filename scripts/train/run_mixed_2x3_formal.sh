@@ -14,6 +14,8 @@ mode="${1:---print-command}"
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 formal_launcher="${MIXED_2X3_FORMAL_LAUNCHER:-$root/scripts/train/run_mixed_formal.sh}"
+asset_audit="${MIXED_2X3_ASSET_AUDIT:-$root/scripts/tools/audit_formal_assets.py}"
+asset_audit_override="${MIXED_2X3_ASSET_AUDIT:+1}"
 git_bin="${MIXED_2X3_GIT_BIN:-git}"
 
 configs=(
@@ -47,6 +49,14 @@ for command in "$formal_launcher" "$git_bin" uv; do
         command -v "$command" >/dev/null 2>&1 || die "required command is missing: $command"
     fi
 done
+if [[ -n "$asset_audit_override" ]]; then
+    [[ -x "$asset_audit" ]] || die "asset audit override is not executable: $asset_audit"
+else
+    [[ -f "$asset_audit" ]] || die "formal asset audit script is missing: $asset_audit"
+fi
+run_asset_audit() {
+    if [[ -n "$asset_audit_override" ]]; then "$asset_audit" "$@"; else uv run python "$asset_audit" "$@"; fi
+}
 
 cd "$root"
 for variable in MODEL_PATH DATA_ROOT DATA_CONFIG OUTPUT_ROOT GCE_CLUSTER_PATH CUDA_VISIBLE_DEVICES; do
@@ -113,6 +123,11 @@ if [[ "$mode" == '--run' ]]; then
     done
     [[ ! -e "$OUTPUT_ROOT/2x3_formal_pipeline.log" ]] || \
         die "existing formal output detected: $OUTPUT_ROOT/2x3_formal_pipeline.log"
+
+    # This gates the immutable 8807/7804 training composition, all token files,
+    # Lumina/VQ identity, and GCE cluster compatibility before group 1 starts.
+    run_asset_audit --mode train --output "$OUTPUT_ROOT/formal_assets.json" \
+        --model "$MODEL_PATH" --train-manifest "$DATA_CONFIG" --gce-clusters "$GCE_CLUSTER_PATH"
 fi
 
 # Verify every underlying single-run launch before any formal run can start.

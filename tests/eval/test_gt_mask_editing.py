@@ -125,6 +125,22 @@ def test_subset_is_fixed_and_preserves_identical_keys_and_seeds(tmp_path):
     assert read_eval_subset(subset) == second
 
 
+def test_zero_limit_freezes_all_eligible_rows_in_manifest_order(tmp_path):
+    files = tmp_path / "files"
+    files.mkdir()
+    rows = []
+    for index in range(3):
+        token = files / f"{index:06d}.pt"
+        torch.save(_payload(torch.tensor([[True, False], [False, False]])), token)
+        rows.append({"sample_key": f"sample-{index}", "token_file": f"files/{token.name}"})
+    manifest = tmp_path / "test_tokens.jsonl"
+    manifest.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    selected = prepare_eval_subset(manifest, tmp_path / "eval_subset.jsonl", seed=42, limit=0)
+    assert [row["sample_key"] for row in selected] == ["sample-0", "sample-1", "sample-2"]
+    assert [row["eval_index"] for row in selected] == [0, 1, 2]
+    assert [row["inference_seed"] for row in selected] == [42, 43, 44]
+
+
 def test_subset_preparation_only_writes_the_requested_subset(tmp_path):
     token = tmp_path / "token.pt"
     torch.save(_payload(torch.ones(2, 2, dtype=torch.bool)), token)
