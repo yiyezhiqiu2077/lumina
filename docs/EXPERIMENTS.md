@@ -30,7 +30,7 @@ local_assets/
 └── logs/
 ```
 
-全部 pinned public assets 位于 `configs/formal_assets.yaml`，禁止用 `main` 或短 revision。
+全部 pinned public assets 位于 `configs/formal_assets.yaml`。
 
 ## 资产审计
 
