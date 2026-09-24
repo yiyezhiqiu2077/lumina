@@ -24,8 +24,7 @@
 ## 依赖方向
 
 `scripts -> src`，`tests -> src`，`dataset -> utils`，`training -> dataset/models`，
-`generators -> models/utils`。canonical `src` 代码不得导入脚本、repository-root
-module 或 `third_party` 实现；也不得依靠 `sys.path` 修改或 `PYTHONPATH`。
+`generators -> models/utils`。
 
 `third_party/VLMEvalKit` 是完整 vendored project，保留其内部目录和依赖管理，
 不作为主项目 package 或默认依赖。
