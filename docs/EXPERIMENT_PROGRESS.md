@@ -1,6 +1,7 @@
-# Lumina MagicBrush 8-GPU 实验运行与进度记录
+# Historical MagicBrush-only v3：Lumina 8-GPU 实验运行与进度记录
 
-> 本文记录本轮 objective ablation 从首次运行、问题定位、代码与训练 recipe 修正、验证实验，到当前正式训练的完整过程。
+> 本文是历史 MagicBrush-only v3 record，不是当前 MagicBrush + RefEdit mixed 2×3 recipe。
+> 它记录本轮 objective ablation 从首次运行、问题定位、代码与训练 recipe 修正、验证实验，到当前正式训练的完整过程。
 >
 > **最终更新：2026-09-19 10:07 UTC。fresh `3e-6` 正式 v3 串行队列已全部完成并科学成功：Attention、GCE、CE 均有 2,750 条连续 metrics、10 个完整且 objective 内 fingerprint 一致的 checkpoint、objective exit code 0 和 `quality_status.json: SUCCEEDED`；串行总队列 `all.exit_code=0`。三项最终 50-step 平均 `L_gen` 分别为 `2.790620`、`2.757802`、`2.790224`，均低于各自 baseline，参数全程有限、无 clipping、`bad_windows=0`。训练进程和 `lumina_all` 已退出，八卡回到每卡约 1,605 MiB 的运行前基线。**
 
@@ -65,13 +66,13 @@
 主要资产路径：
 
 ```text
-/mnt/bn/strategy-mllm-train/user/tanyue/lumina_assets
+<asset-root>/lumina_assets
 ```
 
 MagicBrush 训练 manifest：
 
 ```text
-/mnt/bn/strategy-mllm-train/user/tanyue/lumina_assets/datasets/lumina_edit/magicbrush/tokens/train/manifest.jsonl
+<asset-root>/lumina_assets/datasets/lumina_edit/magicbrush/tokens/train/manifest.jsonl
 ```
 
 ## 3. 首次正式运行（v1）
@@ -93,7 +94,7 @@ bash scripts/train/run_tmux.sh all
 首次输出目录：
 
 ```text
-/mnt/bn/strategy-mllm-train/user/tanyue/experiments/lumina/formal/lumina_objective_ablation_8g_v1
+<experiment-root>/formal/lumina_objective_ablation_8g_v1
 ```
 
 当时也建立了持续更新的 `progress.log`，并监控 pipeline、Smoke、各 objective、tmux 和八张 GPU。
@@ -280,7 +281,7 @@ run fingerprint 会覆盖：
 输出目录：
 
 ```text
-/mnt/bn/strategy-mllm-train/user/tanyue/experiments/lumina/probes/lumina_objective_ablation_8g_probe_ce_formalhorizon_20260918
+<experiment-root>/probes/lumina_objective_ablation_8g_probe_ce_formalhorizon_20260918
 ```
 
 结果：
@@ -315,9 +316,9 @@ run fingerprint 会覆盖：
 对应 roots：
 
 ```text
-/mnt/bn/strategy-mllm-train/user/tanyue/experiments/lumina/probes/lumina_objective_ablation_8g_probe_ce_lr5e6_formalhorizon_20260918
-/mnt/bn/strategy-mllm-train/user/tanyue/experiments/lumina/probes/lumina_objective_ablation_8g_probe_attention_lr5e6_formalhorizon_retry1_20260918
-/mnt/bn/strategy-mllm-train/user/tanyue/experiments/lumina/probes/lumina_objective_ablation_8g_probe_gce_lr5e6_formalhorizon_20260918
+<experiment-root>/probes/lumina_objective_ablation_8g_probe_ce_lr5e6_formalhorizon_20260918
+<experiment-root>/probes/lumina_objective_ablation_8g_probe_attention_lr5e6_formalhorizon_retry1_20260918
+<experiment-root>/probes/lumina_objective_ablation_8g_probe_gce_lr5e6_formalhorizon_20260918
 ```
 
 第一次 Attention `5e-6` probe 在 step 0 遇到 torchrun rendezvous 端口占用；没有训练状态可恢复，因此保留失败 root，并从 base model 在 fresh retry root 重启，最终成功。
@@ -327,7 +328,7 @@ run fingerprint 会覆盖：
 输出目录：
 
 ```text
-/mnt/bn/strategy-mllm-train/user/tanyue/experiments/lumina/smokes/lumina_objective_ablation_8g_smoke_lr5e6_20260918
+<experiment-root>/smokes/lumina_objective_ablation_8g_smoke_lr5e6_20260918
 ```
 
 严格串行运行 Attention → GCE → CE，每项 20 steps。结果：
@@ -349,9 +350,9 @@ run fingerprint 会覆盖：
 - shell syntax checks：通过；
 - `git diff --check`：通过。
 
-随后在 fresh root `/mnt/bn/strategy-mllm-train/user/tanyue/experiments/lumina/smokes/lumina_objective_ablation_8g_smoke_lr3e6_20260918` 完成了 `3e-6` 的 Attention → GCE → CE 串行 Smoke。三项均有 20 条连续 metrics、exit code 0、quality `SUCCEEDED`、完整 checkpoint-000020 和 8 个 rank state；总 `smokes.exit_code=0`，日志无 OOM、`NCCL WARN`、traceback 或质量失败。完成后无 Lumina torchrun 或训练 tmux，八卡均回到约 1,605 MiB/卡。
+随后在 fresh root `<experiment-root>/smokes/lumina_objective_ablation_8g_smoke_lr3e6_20260918` 完成了 `3e-6` 的 Attention → GCE → CE 串行 Smoke。三项均有 20 条连续 metrics、exit code 0、quality `SUCCEEDED`、完整 checkpoint-000020 和 8 个 rank state；总 `smokes.exit_code=0`，日志无 OOM、`NCCL WARN`、traceback 或质量失败。完成后无 Lumina torchrun 或训练 tmux，八卡均回到约 1,605 MiB/卡。
 
-已于 2026-09-18 22:05 UTC 左右从 base model 在全新 root `/mnt/bn/strategy-mllm-train/user/tanyue/experiments/lumina/formal/lumina_objective_ablation_8g_v3_lr3e6_20260918` 启动正式 Attention → GCE → CE 串行队列；未使用任何 probe、v1 或 v2 checkpoint。detached `lumina_all` 和 `lumina_v3_progress` 正常运行，初始 Attention metrics 连续且日志无错误。
+已于 2026-09-18 22:05 UTC 左右从 base model 在全新 root `<experiment-root>/formal/lumina_objective_ablation_8g_v3_lr3e6_20260918` 启动正式 Attention → GCE → CE 串行队列；未使用任何 probe、v1 或 v2 checkpoint。detached `lumina_all` 和 `lumina_v3_progress` 正常运行，初始 Attention metrics 连续且日志无错误。
 
 没有创建 git commit。
 
@@ -360,7 +361,7 @@ run fingerprint 会覆盖：
 正式输出 root：
 
 ```text
-/mnt/bn/strategy-mllm-train/user/tanyue/experiments/lumina/formal/lumina_objective_ablation_8g_v2_lr5e6_20260918
+<experiment-root>/formal/lumina_objective_ablation_8g_v2_lr5e6_20260918
 ```
 
 启动方式：
@@ -426,7 +427,7 @@ checkpoint_every_steps=275
 输出 root：
 
 ```text
-/mnt/bn/strategy-mllm-train/user/tanyue/experiments/lumina/probes/lumina_objective_ablation_8g_probe_attention_lr3e6_h1650_20260918
+<experiment-root>/probes/lumina_objective_ablation_8g_probe_attention_lr3e6_h1650_20260918
 ```
 
 结果：
@@ -447,7 +448,7 @@ checkpoint_every_steps=275
 Attention 完成并释放八卡后，GCE 从 base model 在下列 fresh root 启动：
 
 ```text
-/mnt/bn/strategy-mllm-train/user/tanyue/experiments/lumina/probes/lumina_objective_ablation_8g_probe_gce_lr3e6_h1650_20260918
+<experiment-root>/probes/lumina_objective_ablation_8g_probe_gce_lr3e6_h1650_20260918
 ```
 
 生成配置：
@@ -472,7 +473,7 @@ probe/configs/mb_gce_1650.yaml
 CE 已从相同 base model、独立 fresh root 启动匹配的 `3e-6` / 1650-step probe，不继承 Attention 或 GCE checkpoint：
 
 ```text
-/mnt/bn/strategy-mllm-train/user/tanyue/experiments/lumina/probes/lumina_objective_ablation_8g_probe_ce_lr3e6_h1650_20260918
+<experiment-root>/probes/lumina_objective_ablation_8g_probe_ce_lr3e6_h1650_20260918
 ```
 
 启动前已确认无 Lumina torchrun 或训练 tmux，且八卡已释放到约 1,605 MiB/卡。生成配置保持 stop horizon 1650、scheduler horizon 2750、每 275 步 checkpoint、8×4×1 global batch 32 和 peak LR `3e-6`。最终结果：
@@ -497,7 +498,7 @@ Attention、GCE、CE 三个 matched 1650-step 长 probes 已全部科学成功�
 正式输出 root：
 
 ```text
-/mnt/bn/strategy-mllm-train/user/tanyue/experiments/lumina/formal/lumina_objective_ablation_8g_v3_lr3e6_20260918
+<experiment-root>/formal/lumina_objective_ablation_8g_v3_lr3e6_20260918
 ```
 
 该队列于 2026-09-18 22:05 UTC 左右从 base model 在 fresh root 启动，没有继承 v1、v2、Smoke 或 probe checkpoint。固定顺序为 Attention → GCE → CE。
@@ -561,8 +562,8 @@ GCE 当前科学状态：
 最终产物：
 
 - 已按 `scripts/eval/plot_training_curves.py` 生成 14 张 PNG：Attention 7 张、GCE 4 张、CE 2 张，以及三项 `L_gen` 横向比较图 1 张；
-- comparison 图：`/mnt/bn/strategy-mllm-train/user/tanyue/experiments/lumina/formal/lumina_objective_ablation_8g_v3_lr3e6_20260918/comparison/compare_generation_loss.png`；
-- 轻量结果包：`/mnt/bn/strategy-mllm-train/user/tanyue/experiments/lumina/archives/lumina_objective_ablation_8g_v3_lr3e6_20260918_results.tar.gz`；
+- comparison 图：`<experiment-root>/formal/lumina_objective_ablation_8g_v3_lr3e6_20260918/comparison/compare_generation_loss.png`；
+- 轻量结果包：`<experiment-root>/archives/lumina_objective_ablation_8g_v3_lr3e6_20260918_results.tar.gz`；
 - 生成后人工检查曲线时发现原 rolling mean 在首尾使用零填充，造成边界假性下跌；已改为按实际可用样本数归一化，补充边界单测（`tests/eval/test_plot_training_curves.py`，6 passed），重新生成全部曲线和归档；
 - 最终结果包大小为 8,059,221 bytes，SHA-256 为 `e2f21b9fe2cdcff7f2df197667e1efc3b1e0b40991c17b828313e5116e2bd5f0`；
 - 归档共 59 个 entries，经检查不含 checkpoint 目录、`.pt`、`.pth` 或 `.safetensors` 权重；保留了 metrics、quality 状态、日志、exit code、曲线、正式 configs 和 provenance 文本；
@@ -602,7 +603,7 @@ GCE 当前科学状态：
 所有 Lumina objective ablation 结果现已统一整理到：
 
 ```text
-/mnt/bn/strategy-mllm-train/user/tanyue/experiments/lumina
+<experiment-root>
 ```
 
 目录分层如下：
@@ -615,7 +616,7 @@ GCE 当前科学状态：
 当前正式 v3 root：
 
 ```text
-/mnt/bn/strategy-mllm-train/user/tanyue/experiments/lumina/formal/lumina_objective_ablation_8g_v3_lr3e6_20260918
+<experiment-root>/formal/lumina_objective_ablation_8g_v3_lr3e6_20260918
 ```
 
 正式训练已经完成，因此这里查看的是最终结果快照，而不是仍在滚动的 live watcher。
@@ -623,26 +624,26 @@ GCE 当前科学状态：
 ### 查看正式总览
 
 ```bash
-cat /mnt/bn/strategy-mllm-train/user/tanyue/experiments/lumina/formal/lumina_objective_ablation_8g_v3_lr3e6_20260918/logs/progress.log
+cat <experiment-root>/formal/lumina_objective_ablation_8g_v3_lr3e6_20260918/logs/progress.log
 ```
 
 ### 查看最终 CE 日志尾部
 
 ```bash
-tail -n 40 /mnt/bn/strategy-mllm-train/user/tanyue/experiments/lumina/formal/lumina_objective_ablation_8g_v3_lr3e6_20260918/logs/ce.log
+tail -n 40 <experiment-root>/formal/lumina_objective_ablation_8g_v3_lr3e6_20260918/logs/ce.log
 ```
 
 ### 查看最终一条 CE 指标
 
 ```bash
-tail -n 1 /mnt/bn/strategy-mllm-train/user/tanyue/experiments/lumina/formal/lumina_objective_ablation_8g_v3_lr3e6_20260918/MB-CE-8G-B4-A1-S42/train_metrics.jsonl
+tail -n 1 <experiment-root>/formal/lumina_objective_ablation_8g_v3_lr3e6_20260918/MB-CE-8G-B4-A1-S42/train_metrics.jsonl
 ```
 
 ### 查看 comparison 图与轻量结果包
 
 ```bash
-ls /mnt/bn/strategy-mllm-train/user/tanyue/experiments/lumina/formal/lumina_objective_ablation_8g_v3_lr3e6_20260918/comparison
-ls /mnt/bn/strategy-mllm-train/user/tanyue/experiments/lumina/archives
+ls <experiment-root>/formal/lumina_objective_ablation_8g_v3_lr3e6_20260918/comparison
+ls <experiment-root>/archives
 ```
 
 截至 2026-09-21，旧的 `lumina_progress` 与 `lumina_formal_progress` watcher 已停止；v1、v2、Smoke、probes 与 v3 正式结果都已按上述目录结构归档保留。v1 和 v2 的 `progress.log` 继续仅作为失败实验的历史证据，不作为当前正式队列的实时判断依据。

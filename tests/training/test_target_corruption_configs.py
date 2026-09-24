@@ -44,6 +44,43 @@ def test_formal_target_corruption_pairs_have_no_scientific_drift(full_name, edit
     assert full == edit
 
 
+@pytest.mark.parametrize(
+    ("validation_name", "formal_name"),
+    (
+        ("mixed_ce_4g.yaml", "mixed_ce_8g_b4_a1.yaml"),
+        ("mixed_attention_4g.yaml", "mixed_attention_postrope_region_8g_b4_a1.yaml"),
+        ("mixed_gce_4g.yaml", "mixed_gce_8g_b4_a1.yaml"),
+    ),
+)
+def test_full_target_validation_and_formal_configs_share_scientific_recipe(
+    validation_name, formal_name
+):
+    validation = yaml.safe_load(
+        (REPOSITORY / "configs/train/validation" / validation_name).read_text()
+    )
+    formal = yaml.safe_load(
+        (REPOSITORY / "configs/train/formal" / formal_name).read_text()
+    )
+    scientific_keys = (
+        "objective",
+        "seed",
+        "condition_dropout",
+        "dataset_config",
+        "distributed_config",
+        "paths",
+        "data",
+        "target_corruption",
+        "optimization",
+        "lora",
+        "attention_loss",
+        "gce",
+    )
+    assert {key: validation.get(key) for key in scientific_keys} == {
+        key: formal.get(key) for key in scientific_keys
+    }
+    assert validation["target_corruption"] == {"mode": "full_target"}
+
+
 @pytest.mark.parametrize("name", ("mixed_ce_editregion_4g.yaml", "mixed_attention_editregion_4g.yaml", "mixed_gce_editregion_4g.yaml"))
 def test_editregion_validation_configs_are_four_gpu_correctness_runs(name, environment):
     args = load_train_config(REPOSITORY / "configs/train/validation" / name)
