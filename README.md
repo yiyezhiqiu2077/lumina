@@ -37,7 +37,7 @@ PY
 
 ## 模型与数据
 
-使用 `PROJECT_ROOT/local_assets/` 保存本机软链，不提交模型、数据、checkpoint 或实验输出。
+使用 `PROJECT_ROOT/local_assets/` 保存本机软链，未提交模型、数据、checkpoint 或实验输出。
 
 ```text
 local_assets/
@@ -147,7 +147,7 @@ scripts/eval/evaluate_gt_mask_editing.py
 - ROI / Full DINO-I
 - ROI / Full CLIP-I
 
-正式评测固定使用官方 MagicBrush TEST token manifest，不使用 mixed training manifest：
+正式评测固定使用官方 MagicBrush TEST token manifest
 
 ```bash
 bash scripts/eval/run_mixed_2x3_eval.sh --print-command
