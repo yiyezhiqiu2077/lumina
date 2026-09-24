@@ -10,12 +10,16 @@ from dataset.formal_assets import load_formal_assets, sha256, write_json
 
 def _missing_required(path: Path, kind: str) -> list[str]:
     required = ["config.json"]
-    if kind == "lumina": required += ["model_index.json", "vqvae/config.json"]
+    if kind == "lumina": required += ["model_index.json", "model.safetensors.index.json", "vqvae/config.json"]
     else: required += ["preprocessor_config.json"]
     missing = [name for name in required if not (path / name).is_file()]
     weights = list(path.rglob("*.safetensors")) + list(path.rglob("*.bin"))
     if not weights: missing.append("model weights")
     if kind == "lumina" and not list(path.rglob("*tokenizer*")): missing.append("tokenizer")
+    if kind == "lumina" and (path / "model.safetensors.index.json").is_file():
+        import json
+        for shard in set(json.loads((path / "model.safetensors.index.json").read_text()).get("weight_map", {}).values()):
+            if not (path / shard).is_file(): missing.append(f"missing shard {shard}")
     return missing
 
 

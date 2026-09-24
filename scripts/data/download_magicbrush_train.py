@@ -62,6 +62,7 @@ def main() -> None:
     args = parser.parse_args()
     asset = load_formal_assets(args.config)["magicbrush"]
     root = args.assets_root / "datasets" / "magicbrush"
+    root.mkdir(parents=True, exist_ok=True)
     raw, prepared = root / "raw", root / "prepared"
     if args.geometry_only:
         rows = [json.loads(line) for line in (raw / "train.jsonl").read_text(encoding="utf-8").splitlines() if line]

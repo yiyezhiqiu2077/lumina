@@ -39,10 +39,15 @@ def _read_annotations(path: Path) -> list[dict[str, Any]]:
         values = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     else:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        if path.name == "edit_sessions.json":
+        if path.name == "edit_sessions.json" and isinstance(payload, dict) and "edit_sessions" not in payload and payload and all(isinstance(v, list) for v in payload.values()):
+            values = [
+                {**turn, "img_id": str(img_id), "session_id": str(img_id), "turn_index": turn_index}
+                for img_id, turns in payload.items() for turn_index, turn in enumerate(turns) if isinstance(turn, dict)
+            ]
+            if sum(len(turns) for turns in payload.values()) != len(values): raise ValueError("official dict edit_sessions contains a non-object turn")
+        elif path.name == "edit_sessions.json":
             sessions = payload.get("edit_sessions", payload) if isinstance(payload, dict) else payload
-            if not isinstance(sessions, list):
-                raise ValueError("official edit_sessions.json must contain a session list")
+            if not isinstance(sessions, list): raise ValueError("official edit_sessions.json must contain dict[img_id]->list[turn] or a session list")
             values = []
             for session_index, session in enumerate(sessions):
                 if not isinstance(session, dict):
@@ -102,10 +107,13 @@ def _field(record: dict[str, Any], name: str) -> Any:
     return record[found[0]]
 
 
-def _relative_existing_path(value: Any, root: Path, *, field: str) -> str:
+def _relative_existing_path(value: Any, root: Path, *, field: str, img_id: str) -> str:
     if not isinstance(value, str):
         raise ValueError(f"{field} must be a string path")
-    candidate = (root / value).resolve() if not Path(value).is_absolute() else Path(value).resolve()
+    supplied = Path(value)
+    candidates = [root / supplied]
+    if not supplied.is_absolute(): candidates.append(root / "images" / img_id / supplied.name)
+    candidate = next((path.resolve() for path in candidates if path.is_file()), candidates[0].resolve())
     try:
         relative = candidate.relative_to(root)
     except ValueError as error:
@@ -144,9 +152,9 @@ def canonicalize_test_records(test_root: Path, records: list[dict[str, Any]]) ->
                     "img_id": img_id,
                     "turn_index": turn_index,
                     "session_id": session_id,
-                    "source": _relative_existing_path(_field(record, "source"), root, field="source"),
-                    "target": _relative_existing_path(_field(record, "target"), root, field="target"),
-                    "mask_edit": _relative_existing_path(_field(record, "mask_edit"), root, field="mask_edit"),
+                    "source": _relative_existing_path(_field(record, "source"), root, field="source", img_id=img_id),
+                    "target": _relative_existing_path(_field(record, "target"), root, field="target", img_id=img_id),
+                    "mask_edit": _relative_existing_path(_field(record, "mask_edit"), root, field="mask_edit", img_id=img_id),
                     "instruction": instruction,
                 }
             )

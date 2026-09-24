@@ -20,7 +20,8 @@ def main() -> None:
         import json
         existing = json.loads(marker.read_text(encoding="utf-8"))
         if existing.get("repo_id") == entry["repo_id"] and existing.get("resolved_revision") == entry["revision"]:
-            if any(destination.iterdir()): return
+            files=existing.get("files", {})
+            if files and all((destination / name).is_file() for name in files): return
         raise RuntimeError(f"RefEdit destination identity mismatch: {destination}")
     from huggingface_hub import snapshot_download
     destination.parent.mkdir(parents=True, exist_ok=True)

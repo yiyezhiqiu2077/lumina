@@ -87,6 +87,7 @@ formal_asset_path="${FORMAL_ASSET_AUDIT_PATH:-${ASSET_ROOT:+$ASSET_ROOT/artifact
 formal_asset_path="${formal_asset_path:-$OUTPUT_ROOT/formal_assets.json}"
 
 pipeline_log="$EVAL_OUTPUT_ROOT/2x3_eval_pipeline.log"
+[[ ! -e "$pipeline_log" ]] || die "existing formal evaluation pipeline log detected: $pipeline_log"
 : > "$pipeline_log"
 log_pipeline() { printf '%s %s\n' "$(date -Is)" "$*" | tee -a "$pipeline_log"; }
 verify_eval() {
@@ -94,11 +95,14 @@ verify_eval() {
 import json, math, sys
 from pathlib import Path
 rows=[json.loads(x) for x in (Path(sys.argv[1])/"per_sample.jsonl").read_text().splitlines() if x]
+summary=json.loads((Path(sys.argv[1])/"summary.json").read_text())
 required='edit_token_accuracy source_copy_token_accuracy changed_token_accuracy inside_l1_target inside_mse_target inside_psnr_target inside_l1_target_recon boundary_l1_source_recon full_l1_target full_mse_target full_psnr_target full_lpips roi_lpips full_dino_i roi_dino_i full_clip_i roi_clip_i'.split()
 if len(rows)!=1053: raise SystemExit(f"expected 1053 per-sample rows, got {len(rows)}")
 for metric in required:
     values=[r.get(metric) for r in rows]
     if len(values)!=1053 or any(v is None or not math.isfinite(float(v)) for v in values): raise SystemExit(f"invalid metric {metric}")
+    item=summary.get(metric, {})
+    if not isinstance(item, dict) or item.get("count")!=1053 or not math.isfinite(float(item.get("mean", float("nan")))): raise SystemExit(f"invalid summary metric {metric}")
 PY
 }
 

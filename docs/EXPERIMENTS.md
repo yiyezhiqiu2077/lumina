@@ -7,6 +7,7 @@
 ```bash
 git clone git@github.com:yiyezhiqiu2077/lumina.git
 cd lumina
+git checkout <FORMAL_EXPERIMENT_CODE_SHA>
 uv sync --frozen --extra dev --extra upstream --extra analysis --extra eval --extra data
 ```
 
@@ -50,6 +51,8 @@ export DATA_ROOT="$ASSET_ROOT/datasets/mixed"
 export DATA_CONFIG="$DATA_ROOT/train/manifest.jsonl"
 export GCE_CLUSTER_PATH="$ASSET_ROOT/artifacts/gce_clusters_1024_512.pt"
 export OUTPUT_ROOT="$ASSET_ROOT/experiments/lumina_mixed_2x3"
+export EVAL_OUTPUT_ROOT="$ASSET_ROOT/experiments/lumina_mixed_2x3_eval"
+mkdir -p "$OUTPUT_ROOT" "$EVAL_OUTPUT_ROOT"
 bash scripts/train/run_mixed_2x3_formal.sh --print-command
 bash scripts/train/run_mixed_2x3_formal.sh --run
 ```
@@ -78,7 +81,7 @@ Full LPIPS 为 canonical `LPIPS(alex, spatial=False)`；ROI LPIPS 为 `spatial=T
 ## 轻量结果打包
 
 ```bash
-uv run python scripts/tools/package_formal_results.py --train-root "$OUTPUT_ROOT" --eval-root "$EVAL_OUTPUT_ROOT" --output "$ASSET_ROOT/archives/lumina_mixed_2x3_results.tar.gz"
+uv run python scripts/tools/package_formal_results.py --train-root "$OUTPUT_ROOT" --eval-root "$EVAL_OUTPUT_ROOT" --formal-assets "$ASSET_ROOT/artifacts/formal_assets.json" --output "$ASSET_ROOT/archives/lumina_mixed_2x3_results.tar.gz"
 ```
 
 仅白名单配置、provenance、quality、summary、gzip JSONL、comparison 和 manifest；checkpoint、weights、token、raw data、images、cache 均排除。超过 50 MiB 明确失败。
