@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import random
@@ -37,6 +38,40 @@ def seed_all(seed: int) -> None:
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+
+
+def _git_metadata(repository: Path) -> dict[str, str | bool | None]:
+    """Best-effort repository identity for an on-disk run record."""
+    def query(*arguments: str) -> str | None:
+        result = subprocess.run(
+            ["git", "-C", str(repository), *arguments],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        return result.stdout.strip() if result.returncode == 0 else None
+
+    dirty = query("status", "--short")
+    return {
+        "git_commit": query("rev-parse", "HEAD"),
+        "git_dirty": bool(dirty),
+        "git_status_short": dirty,
+    }
+
+
+def _write_run_provenance(output: Path) -> None:
+    repository = Path(__file__).resolve().parents[2]
+    lock_path = repository / "uv.lock"
+    payload = {
+        **_git_metadata(repository),
+        "uv_lock_sha256": (
+            hashlib.sha256(lock_path.read_bytes()).hexdigest() if lock_path.is_file() else None
+        ),
+    }
+    (output / "run_provenance.json").write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
 def reduce_mean(value: torch.Tensor) -> torch.Tensor:
@@ -88,16 +123,32 @@ def parameter_group_norms(
     }
 
 
+def scale_reduced_auxiliary_gradients(
+    raw_gradients: tuple[torch.Tensor | None, ...], auxiliary_weight: float
+) -> tuple[torch.Tensor | None, ...]:
+    """Apply the objective scalar to already globally reduced raw gradients."""
+    return tuple(
+        None if gradient is None else float(auxiliary_weight) * gradient
+        for gradient in raw_gradients
+    )
+
+
 def gradient_decomposition(
-    generation_loss: torch.Tensor,
+    shared_generation_loss: torch.Tensor,
     raw_auxiliary_loss: torch.Tensor,
-    weighted_auxiliary_loss: torch.Tensor,
+    auxiliary_weight: float,
     parameters: list[torch.nn.Parameter],
     device: torch.device,
 ) -> dict[str, torch.Tensor]:
-    """Measure globally reduced component gradients without changing ``.grad``."""
+    """Measure globally reduced components without changing the training backward.
+
+    The weighted auxiliary vector is deliberately derived *after* DDP reduction
+    from the raw auxiliary vector. A second ``autograd.grad`` call on the
+    weighted scalar is needlessly sensitive to autocast/reduction details and
+    obscures ``g_weighted = weight * g_raw``.
+    """
     generation_gradients = torch.autograd.grad(
-        generation_loss,
+        shared_generation_loss,
         parameters,
         retain_graph=True,
         allow_unused=True,
@@ -108,50 +159,51 @@ def gradient_decomposition(
         retain_graph=True,
         allow_unused=True,
     )
-    weighted_auxiliary_gradients = torch.autograd.grad(
-        weighted_auxiliary_loss,
-        parameters,
-        retain_graph=True,
-        allow_unused=True,
-    )
     generation_squared = torch.zeros((), device=device)
     raw_auxiliary_squared = torch.zeros((), device=device)
     weighted_auxiliary_squared = torch.zeros((), device=device)
     dot = torch.zeros((), device=device)
     world_size = dist.get_world_size()
-    for generation_gradient, raw_auxiliary_gradient, weighted_auxiliary_gradient in zip(
+    reduced_raw_gradients: list[torch.Tensor | None] = []
+    reduced_generation_gradients: list[torch.Tensor | None] = []
+    for generation_gradient, raw_auxiliary_gradient in zip(
         generation_gradients,
         raw_auxiliary_gradients,
-        weighted_auxiliary_gradients,
     ):
         if generation_gradient is not None:
             generation_gradient = generation_gradient.detach().float()
             dist.all_reduce(generation_gradient)
             generation_gradient /= world_size
             generation_squared += generation_gradient.pow(2).sum()
+        reduced_generation_gradients.append(generation_gradient)
         if raw_auxiliary_gradient is not None:
             raw_auxiliary_gradient = raw_auxiliary_gradient.detach().float()
             dist.all_reduce(raw_auxiliary_gradient)
             raw_auxiliary_gradient /= world_size
             raw_auxiliary_squared += raw_auxiliary_gradient.pow(2).sum()
+        reduced_raw_gradients.append(raw_auxiliary_gradient)
+    weighted_auxiliary_gradients = scale_reduced_auxiliary_gradients(
+        tuple(reduced_raw_gradients), auxiliary_weight
+    )
+    for generation_gradient, weighted_auxiliary_gradient in zip(
+        reduced_generation_gradients, weighted_auxiliary_gradients
+    ):
         if weighted_auxiliary_gradient is not None:
-            weighted_auxiliary_gradient = weighted_auxiliary_gradient.detach().float()
-            dist.all_reduce(weighted_auxiliary_gradient)
-            weighted_auxiliary_gradient /= world_size
             weighted_auxiliary_squared += weighted_auxiliary_gradient.pow(2).sum()
-        if generation_gradient is not None and weighted_auxiliary_gradient is not None:
-            dot += (generation_gradient * weighted_auxiliary_gradient).sum()
+            if generation_gradient is not None:
+                dot += (generation_gradient * weighted_auxiliary_gradient).sum()
     generation_norm = generation_squared.sqrt()
     raw_auxiliary_norm = raw_auxiliary_squared.sqrt()
     weighted_auxiliary_norm = weighted_auxiliary_squared.sqrt()
     cosine = dot / (generation_norm * weighted_auxiliary_norm).clamp_min(1e-12)
     return {
-        "generation_gradient_norm": generation_norm,
+        "shared_generation_gradient_norm": generation_norm,
         "raw_auxiliary_gradient_norm": raw_auxiliary_norm,
         "weighted_auxiliary_gradient_norm": weighted_auxiliary_norm,
         "raw_auxiliary_to_generation_gradient_ratio": raw_auxiliary_norm / generation_norm.clamp_min(1e-12),
         "weighted_auxiliary_to_generation_gradient_ratio": weighted_auxiliary_norm / generation_norm.clamp_min(1e-12),
         # Preserve the old names as aliases for downstream plotting tools.
+        "generation_gradient_norm": generation_norm,
         "auxiliary_gradient_norm": weighted_auxiliary_norm,
         "auxiliary_to_generation_gradient_ratio": weighted_auxiliary_norm / generation_norm.clamp_min(1e-12),
         "gradient_cosine": cosine,
@@ -322,9 +374,11 @@ def run(args):
         "sample_count",
         "edit_token_count",
         "edit_fraction",
+        "masked_target_token_count",
+        "masked_target_fraction",
         "masked_edit_token_count",
         "masked_edit_fraction",
-        "valid_target_count",
+        "valid_target_token_sum",
     )
     corruption_sums = {
         group: {field: torch.zeros((), device=device) for field in corruption_fields}
@@ -344,6 +398,7 @@ def run(args):
                 json.dumps({"objective": banner, "args": _json_args(args)}, indent=2) + "\n",
                 encoding="utf-8",
             )
+            _write_run_provenance(args.output)
         write_quality_status(quality_path, "RUNNING", objective=args.objective, step=0)
         print("=" * 40)
         print("MagicBrush Training Objective")
@@ -621,7 +676,11 @@ def run(args):
                         decomposition = gradient_decomposition(
                             shared_generation_loss,
                             raw_auxiliary_loss,
-                            weighted_auxiliary_loss,
+                            (
+                                args.attention_loss_weight
+                                if args.objective == "attention"
+                                else args.gce_weight
+                            ),
                             trainable,
                             device,
                         )
@@ -639,19 +698,25 @@ def run(args):
                 for row in rows:
                     dataset_name = str(row.get("dataset_name", "magicbrush")).lower()
                     groups = ["overall"] + ([dataset_name] if dataset_name in corruption_sums else [])
-                    masked_count = row.get("masked_edit_token_count")
-                    if masked_count is None:
-                        masked_count = row["valid_target_label_count"]
-                    masked_fraction = row.get("masked_edit_fraction")
-                    if masked_fraction is None:
-                        masked_fraction = masked_count / max(row["target_spatial_count"], 1)
+                    masked_target_count = row["masked_target_token_count"]
+                    masked_target_fraction = row["masked_target_fraction"]
+                    masked_edit_count = row.get("masked_edit_token_count")
+                    if masked_edit_count is None:
+                        # Legacy aliases intentionally retain their historical
+                        # full-target meaning for old plotting consumers.
+                        masked_edit_count = masked_target_count
+                    masked_edit_fraction = row.get("masked_edit_fraction")
+                    if masked_edit_fraction is None:
+                        masked_edit_fraction = masked_target_fraction
                     values = {
                         "sample_count": 1.0,
                         "edit_token_count": float(row["edit_token_count"]),
                         "edit_fraction": float(row["edit_fraction"]),
-                        "masked_edit_token_count": float(masked_count),
-                        "masked_edit_fraction": float(masked_fraction),
-                        "valid_target_count": float(row["valid_target_label_count"]),
+                        "masked_target_token_count": float(masked_target_count),
+                        "masked_target_fraction": float(masked_target_fraction),
+                        "masked_edit_token_count": float(masked_edit_count),
+                        "masked_edit_fraction": float(masked_edit_fraction),
+                        "valid_target_token_sum": float(row["valid_target_label_count"]),
                     }
                     for group in groups:
                         for key, value in values.items():
@@ -739,13 +804,42 @@ def run(args):
                     for value in values.values():
                         dist.all_reduce(value)
                     count = values.pop("sample_count")
+                    denominator = count.clamp_min(1.0)
                     global_corruption[group] = {
-                        key: (value / count.clamp_min(1.0)).item()
-                        for key, value in values.items()
+                        "sample_count": int(count.item()),
+                        "mean_edit_token_count": (values["edit_token_count"] / denominator).item(),
+                        "mean_edit_fraction": (values["edit_fraction"] / denominator).item(),
+                        "mean_valid_target_count": (
+                            values["valid_target_token_sum"] / denominator
+                        ).item(),
+                        "valid_target_token_sum": values["valid_target_token_sum"].item(),
+                        "masked_target_token_count": (
+                            values["masked_target_token_count"] / denominator
+                        ).item(),
+                        "masked_target_fraction": (
+                            values["masked_target_fraction"] / denominator
+                        ).item(),
+                        # Keep the previous names as mean-valued aliases.
+                        "edit_token_count": (values["edit_token_count"] / denominator).item(),
+                        "edit_fraction": (values["edit_fraction"] / denominator).item(),
+                        "masked_edit_token_count": (
+                            values["masked_edit_token_count"] / denominator
+                        ).item(),
+                        "masked_edit_fraction": (
+                            values["masked_edit_fraction"] / denominator
+                        ).item(),
+                        "valid_target_count": (
+                            values["valid_target_token_sum"] / denominator
+                        ).item(),
                     }
-                    global_corruption[group]["sample_count"] = int(count.item())
                     for value in local_values.values():
                         value.zero_()
+                overall_valid_target_sum = global_corruption["overall"]["valid_target_token_sum"]
+                for values in global_corruption.values():
+                    values["supervised_token_share"] = values["valid_target_token_sum"] / max(
+                        overall_valid_target_sum,
+                        1.0,
+                    )
                 if layer_sums is not None:
                     layers = layer_sums.clone()
                     dist.all_reduce(layers)

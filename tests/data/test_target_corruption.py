@@ -45,6 +45,11 @@ def test_full_target_is_exact_legacy_regression():
     assert actual["labels"] == expected[1]
     assert actual["masked_count"] == expected[2]
     assert int(actual["spatial_labels"].ne(-100).sum()) == expected[2]
+    expected_input = target.long().clone()
+    expected_input[actual["selected_spatial"]] = (
+        SPECIAL_TOKENS["mask_token"] - SPECIAL_TOKENS["image_token_offset"]
+    )
+    assert torch.equal(actual["input_spatial"], expected_input)
 
 
 def test_editregion_hardlock_has_exact_source_target_mask_and_label_semantics():

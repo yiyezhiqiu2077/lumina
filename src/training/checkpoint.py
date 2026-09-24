@@ -15,6 +15,7 @@ from training.lora import load_lora_state_dict, lora_state_dict
 
 
 _FINGERPRINT_SOURCES = (
+    "src/dataset/utils.py",
     "src/dataset/magicbrush.py",
     "src/dataset/refedit.py",
     "src/training/checkpoint.py",
@@ -28,6 +29,8 @@ _FINGERPRINT_SOURCES = (
     "src/models/objectives/attention.py",
     "src/models/objectives/gce.py",
     "src/models/objectives/reduction.py",
+    "src/utils/constants.py",
+    "src/utils/prompt_utils.py",
 )
 
 

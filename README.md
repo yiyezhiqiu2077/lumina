@@ -1,4 +1,4 @@
-# Lumina-DiMOO：统一 MagicBrush 训练
+# Lumina-DiMOO：Mixed editing objective ablation
 
 ## Repository Layout
 
@@ -10,180 +10,103 @@
 - vendored third-party：`third_party/`
 
 当前依赖方向和 package 职责见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，环境说明见
-[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)。
+[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)。当前主工作流是 MagicBrush + RefEdit 的 2×3
+controlled ablation；旧 MagicBrush-only v3 配置仍保留在 `configs/train/ablation/mb_*.yaml`，仅用于
+追溯历史结果，不是当前 mixed recipe。
 
-本仓库的 `main` 只维护一份 MagicBrush 训练框架，通过唯一的 objective 模式隔离三种
-实验：
-
-| 模式 | 总损失 | 额外依赖 |
+| objective | `full_target` | `edit_region_hardlock` |
 | --- | --- | --- |
-| `ce` | `L_gen` | 无 |
-| `attention` | `L_gen + 0.1 × L_attn` | attention auxiliary |
-| `gce` | `L_gen + 1.0 × L_gce` | `GCE_CLUSTER_PATH` |
+| CE | `mixed_ce_8g_b4_a1.yaml` | `mixed_ce_editregion_8g_b4_a1.yaml` |
+| Attention | `mixed_attention_postrope_region_8g_b4_a1.yaml` | `mixed_attention_editregion_8g_b4_a1.yaml` |
+| GCE | `mixed_gce_8g_b4_a1.yaml` | `mixed_gce_editregion_8g_b4_a1.yaml` |
 
-三种模式互斥：attention 不加载或实例化 GCE；GCE 不请求 attention Q/K auxiliary；CE
-只计算官方 generation CE。它们共享 padding correctness、数据 corruption、LoRA、DDP、
-gradient accumulation、checkpoint 和 resume 实现。
+三种 objective 互斥：CE 为 `L_gen + 1e-5 × L_z`；Attention 为
+`L_gen + 1e-5 × L_z + 0.3 × L_attn`；GCE 为
+`L_gen + 1e-5 × L_z + 1.0 × L_gce`（levels 1024 / 512）。它们共享 padding correctness、
+data corruption、LoRA、DDP、gradient accumulation、checkpoint 和 resume 实现。
 
 ## 环境与资产
 
 ```bash
 git clone git@github.com:yiyezhiqiu2077/lumina.git
 cd lumina
-git switch main
 uv sync --extra dev
 
-export MODEL_PATH=/path/to/Lumina-DiMOO
-export DATA_ROOT=/path/to/MagicBrush
-export EXPERIMENT_ROOT=/path/to/experiments/lumina
-export OUTPUT_ROOT="$EXPERIMENT_ROOT/formal/lumina_objective_ablation_8g_v3_lr3e6_20260918"
-```
-
-`uv sync` 会按项目锁定的 PyTorch CUDA 12.1 wheel index 安装依赖。数据根目录应包含
-`official_tokens/train/manifest.jsonl`；模型权重、MagicBrush 数据、GCE cluster、日志和
-checkpoint 均不在 Git 中。
-
-### MagicBrush + RefEdit 混合训练（新实验）
-
-新实验统一通过 Git 忽略的 `local_assets/` 访问机器本地资产；真实路径不写入配置或 Git。
-先由用户明确传入已有目录创建软链：
-
-```bash
 bash scripts/setup_local_assets.sh model /path/to/Lumina-DiMOO
 bash scripts/setup_local_assets.sh magicbrush /path/to/magicbrush-token-root
 bash scripts/setup_local_assets.sh refedit /path/to/refedit-final-mask
 bash scripts/setup_local_assets.sh mixed /path/to/mixed-token-root
 ```
 
-RefEdit 必须先经官方 parquet 的严格 `(source_relative_path, row_idx)`、`raw.img_id == audit.img_id`、
-instruction、图像尺寸与 mask 检查，再写入与 MagicBrush 相同的 token payload：
+本项目通过 Git 忽略的 `local_assets/` 使用机器本地资产：
+`local_assets/models/Lumina-DiMOO`、`local_assets/datasets/magicbrush`、
+`local_assets/datasets/refedit`、`local_assets/datasets/mixed` 与
+`local_assets/experiments`。模型权重、token data、GCE cluster、logs 与 checkpoint 均不在 Git 中。
+mixed manifest 的 `token_file` 相对其自身父目录解析；具体 dataset revision 和审计结果以该目录的
+`dataset_meta.json` / mixed metadata 为准。
+
+当前审计的 mixed manifest 为 MagicBrush 8807 + RefEdit 7804 = 16611 样本。8 GPU、batch/GPU 4、
+accum 1 时，实际每 epoch step 与总 step 由 manifest、sampler 与 loader 自动计算；当前该 manifest
+对应 519 step/epoch、5190 step/10 epoch，不是硬编码常数。
+
+## 当前 mixed 训练 recipe
+
+| 项目 | 值 |
+| --- | --- |
+| GPU / batch / accumulation / global batch | 8 / 4 / 1 / 32 |
+| seed / precision / max sequence | 42 / BF16 / 5120 |
+| optimizer | AdamW，lr=3e-6，betas=(0.9, 0.95)，wd=0.1，clip=4.0，warmup=20 |
+| generation reduction | global `token_mean`，`z-loss=1e-5` |
+| LoRA | r=16，alpha=16，dropout=0.05；q/k/v/attn_out |
+| Attention | post-RoPE、`region_mass`、layers 24–27、weight=0.3 |
+| GCE | weight=1.0，levels 1024 / 512 |
+
+`full_target` 保持 Lumina 原有的 whole-target random masked corruption。`edit_region_hardlock` 在
+GT mask 外使用 source codes，在 mask 内保留 target codes，并只将当前 cosine corruption 随机选出的
+subset 置为 MASK；generation loss 只监督这个 subset。Attention loss 始终使用完整 GT edit mask，
+对所有 source spatial tokens softmax：`P_G = sum_{j in M} p_j`，
+`L_attn = -log(P_G.clamp_min(eps))`。它不是 hard attention mask，也不只在 mask 内 softmax。
+
+在 `edit_region_hardlock + token_mean` 下，mask 较大的 sample 自然贡献更多 supervised tokens，
+因此 MagicBrush / RefEdit 的 sample proportion 不等于 supervised-token proportion。日志会记录
+`valid_target_token_sum` 与 `supervised_token_share`；这只是当前 recipe 的可解释性质，不参与 loss。
+
+## 启动与验证
+
+当前 4×A800 只用于 correctness：已完成 20-step full-target smoke、20-step editregion smoke，及
+Attention/GCE accum=1 diagnostic。不要在当前机器启动 8-GPU formal run。
 
 ```bash
-python scripts/data/preprocess_refedit.py audit \
-  --raw-root local_assets/datasets/refedit --output /path/to/refedit-tokens
-python scripts/data/preprocess_refedit.py tokenize \
-  --raw-root local_assets/datasets/refedit --model local_assets/models/Lumina-DiMOO \
-  --output /path/to/refedit-tokens
-python scripts/data/build_mixed_edit_manifest.py \
-  --magicbrush-manifest local_assets/datasets/magicbrush/official_tokens/train/manifest.jsonl \
-  --refedit-manifest /path/to/refedit-tokens/manifest.jsonl --output /path/to/mixed
+# 4-GPU correctness；默认/兼容旧调用为 full_target
+bash scripts/train/run_mixed_smokes.sh full --print-command
+bash scripts/train/run_mixed_smokes.sh editregion --print-command
+bash scripts/train/run_mixed_smokes.sh all --print-command
+
+# 未来 8-GPU 机器：只打印正式命令；--run 要求 clean Git worktree
+bash scripts/train/run_mixed_formal.sh \
+  configs/train/formal/mixed_ce_8g_b4_a1.yaml --print-command
 ```
 
-`configs/train/validation/mixed_*.yaml` 是当前 4-GPU、20 optimizer-step 的正确性 smoke；
-`configs/train/formal/mixed_*.yaml` 仅为之后 8-GPU 正式实验准备，按 mixed manifest 的实际行数
-自动计算每 epoch、10 epoch、scheduler horizon 与每 epoch checkpoint，当前机器不得运行正式配置。
+每个 formal model 必须从同一 original Lumina base 和 fresh LoRA 开始，使用独立 output root；不得
+resume 4-GPU smoke、旧 v3、另一个 objective 或另一个 corruption mode。checkpoint fingerprint 覆盖
+corruption、训练语义与 runtime semantic source，错误 resume 会被拒绝。run provenance 记录 Git SHA、
+dirty status 与 `uv.lock` SHA256。
 
-推荐将本项目的实验结果统一放在一个项目目录下，例如 `experiments/lumina/`，并按
-`formal/`、`probes/`、`smokes/`、`archives/` 分层保存。`OUTPUT_ROOT` 应始终指向某一次
-单独运行的根目录，而不是共享父目录。
+## 评测与工具
 
-## 三个启动入口
+GT-mask hard-lock generation 的主 evaluator 是
+[`scripts/eval/evaluate_gt_mask_editing.py`](scripts/eval/evaluate_gt_mask_editing.py)。它支持
+Source-copy Token Accuracy、Edit Token Accuracy、Changed-token Accuracy、Inside L1、Inside PSNR、
+Inside L1 vs Target Reconstruction、boundary leakage/seam diagnostic 和 oracle hard-lock diagnostic。
+这里的 GT mask 是 inference input，不是 free-edit localization benchmark；未实现的 LPIPS/DINO/CLIP
+不应被表述为已有正式结果。
 
-```bash
-# B0：与 GCE 设置匹配的 CE baseline（4 GPU × batch 4 × accum 2）
-uv run python scripts/train/train.py --config configs/train/magicbrush_ce.yaml
-
-# A1：attention supervision（2 GPU × batch 8 × accum 4）
-uv run python scripts/train/train.py --config configs/train/magicbrush_attention.yaml
-
-# G1：GCE（4 GPU × batch 4 × accum 2）
-export GCE_CLUSTER_PATH=/path/to/gce_clusters_1024_512.pt
-uv run python scripts/train/train.py --config configs/train/magicbrush_gce.yaml
-```
-
-三个配置均由唯一入口 [train.py](scripts/train/train.py) 读取。该入口会读取各训练配置
-显式引用的 dataset / distributed 配置，在启动前校验 global batch，然后使用
-`torch.distributed.run` 启动同一脚本的 worker 模式。差异只在 `objective.mode` 与各自真实
-超参数。CE/GCE 使用 global batch 32；attention 使用 global batch 64，因此 CE 不应被
-表述为与 attention 的严格 matched baseline。
-
-`DATA_CONFIG` 可覆盖 dataset 配置中的默认 manifest，`OUTPUT_ROOT` 指定输出根目录；
-`--resume-from-checkpoint` 可从新进程恢复。例如：
-
-```bash
-uv run python scripts/train/train.py --config configs/train/magicbrush_gce.yaml \
-  --resume-from-checkpoint /path/to/checkpoint-000500
-```
-
-## 配置与验证
-
-- [configs/train/magicbrush_ce.yaml](configs/train/magicbrush_ce.yaml)
-- [configs/train/magicbrush_attention.yaml](configs/train/magicbrush_attention.yaml)
-- [configs/train/magicbrush_gce.yaml](configs/train/magicbrush_gce.yaml)
-
-## Matched Objective Ablation
-
-严格 matched 的 CE / Attention / GCE 对照实验位于
-[`configs/train/ablation/`](configs/train/ablation/)，统一使用 8 GPU、每卡 batch 4、gradient
-accumulation 1、global batch 32 和相同的训练 schedule。matched recipe 还统一使用 sample-mean
-supervised-token reduction、`1e-5` logit z-loss、显式 LoRA targets 与 fail-fast quality gate。完整的环境、
-资产准备、三目标 tmux smoke、保持正式 2,750-step cosine horizon 且分别覆盖已知 step-1450 延迟失稳区的 1,650-step matched 长探针、一条命令 tmux 正式启动、安全 resume、曲线与结果打包流程见
-[`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md)。
-
-`configs/train/magicbrush_*.yaml` 是既有实验配置；它们保留用于历史实验，不构成这三种
-objective 的严格 matched comparison。
-
-## 数据与工具
-
-数据准备和 tokenization 共用 `src/dataset/` 的实现：
-
-```bash
-# 从原始 MagicBrush manifest 创建固定的 train/val/probe manifest
-uv run python scripts/data/preprocess_magicbrush.py prepare \
-  --train-manifest /path/to/train.jsonl --output /path/to/prepared
-
-# 用本地 Lumina VQ-VAE 预编码上述 manifest
-uv run python scripts/data/preprocess_magicbrush.py pretokenize \
-  --manifest /path/to/prepared/train.jsonl --model "$MODEL_PATH" --output /path/to/tokens
-
-# 检查图像/VQ 几何、序列契约和非方形 token 布局
-uv run python scripts/data/check_magicbrush.py all \
-  --manifest /path/to/tokens/manifest.jsonl --model "$MODEL_PATH" --output /path/to/audit
-```
-
-GCE cluster 是独立数据资产，不会提交到 Git。使用工具生成和检查：
-
-```bash
-uv run python scripts/tools/gce/build_clusters.py --model "$MODEL_PATH" --output /path/to/gce_clusters_1024_512.pt
-uv run python scripts/tools/gce/inspect_clusters.py --model "$MODEL_PATH" --clusters /path/to/gce_clusters_1024_512.pt
-uv run python scripts/tools/gce/probe_scale.py --model "$MODEL_PATH" --manifest /path/to/tokens/manifest.jsonl --clusters /path/to/gce_clusters_1024_512.pt
-```
-
-attention layer calibration 位于 `scripts/tools/attention/calibrate_layers.py`。hard-lock 评测与
-评测 manifest 预处理位于 `scripts/eval/`。
-
-## Upstream SFT 与推理
-
-原始 Lumina SFT 依赖单独的 upstream extra：
-
-```bash
-uv sync --extra upstream
-uv run python scripts/train/upstream/train.py --help
-```
-
-上游 SFT 的示例数据配置在 `configs/upstream/data.yaml`。推理入口为：
-
-```bash
-uv run python scripts/inference/t2i.py --help
-uv run python scripts/inference/i2i.py --help
-uv run python scripts/inference/mmu.py --help
-uv run python scripts/inference/t2i_ddp.py --help
-```
-
-## Repository Structure
-
-- `src/dataset/`：MagicBrush 训练数据与稳定 corruption。
-- `src/models/`：Lumina 模型、attention 与 GCE objective 的唯一实现。
-- `src/training/`：LoRA、objective dispatch、checkpoint、DDP 与配置加载。
-- `scripts/train/train.py`：唯一正式 MagicBrush 训练入口。
-- `scripts/data/`：MagicBrush 数据准备与契约检查 CLI。
-- `scripts/tools/gce/`：GCE cluster 构建、检查和尺度诊断 CLI；损失实现不在脚本中。
-- `scripts/eval/`：MagicBrush 评测工作流。
-- `configs/`：训练、数据和 distributed specification。
-- `tests/`：按 data/models/objectives/training 分层的 regression tests。
+数据准备、RefEdit 审计和 manifest 构建见 `scripts/data/`；GCE cluster 是独立资产，工具位于
+`scripts/tools/gce/`。更多面向新集群的一条命令流程、环境检查、smoke、formal、评测与打包见
+[docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)。
 
 ```bash
 uv run pytest -q
 ```
 
-多节点启动、FP8、FSDP 和 FlashAttention 性能优化不属于当前 main 的承诺范围。
+多节点启动、FP8、FSDP 和 FlashAttention 性能优化不属于当前工作流的承诺范围。

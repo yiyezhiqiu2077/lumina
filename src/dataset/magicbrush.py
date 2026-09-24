@@ -105,13 +105,19 @@ def corrupt_target_spatial(
         tokens, labels, count = _masked_target(target_codes, rng)
         spatial_labels = _spatial_labels_from_layout(labels, height, width)
         selected = spatial_labels.ne(-100)
+        input_spatial = target_codes.long().clone()
+        input_spatial[selected] = (
+            SPECIAL_TOKENS["mask_token"] - SPECIAL_TOKENS["image_token_offset"]
+        )
         return {
             "tokens": tokens,
             "labels": labels,
             "masked_count": count,
             "candidate_count": target_codes.numel(),
             "selected_spatial": selected,
-            "input_spatial": target_codes.long(),
+            # This diagnostic value must describe the code-domain spatial input
+            # actually seen by the model, rather than the clean target.
+            "input_spatial": input_spatial,
             "spatial_labels": spatial_labels,
         }
     if mode != "edit_region_hardlock":
@@ -301,6 +307,8 @@ class EditTokenDataset(Dataset):
             "target_corruption_mode": self.target_corruption_mode,
             "edit_token_count": int(edit_mask.sum()),
             "edit_fraction": float(edit_mask.float().mean()),
+            "masked_target_token_count": masked_count,
+            "masked_target_fraction": float(masked_count / max(payload["target_codes"].numel(), 1)),
             "masked_edit_token_count": masked_count if self.target_corruption_mode == "edit_region_hardlock" else None,
             "masked_edit_fraction": (
                 float(masked_count / max(int(edit_mask.sum()), 1))
