@@ -72,8 +72,6 @@ bash scripts/eval/run_mixed_2x3_eval.sh --print-command
 bash scripts/eval/run_mixed_2x3_eval.sh --run
 ```
 
-Full LPIPS 为 canonical `LPIPS(alex, spatial=False)`；ROI LPIPS 为 `spatial=True` map 的 GT-mask 均值。DINO/CLIP ROI 采用同一 GT-mask bbox 加 10% context。
-
 ## 结果比较
 
 评测输出六组 summary、per-sample JSONL 与 comparison JSON/CSV。只使用同一 1053-turn TEST、相同 seed、sampling、metric weights 与 ROI padding。
