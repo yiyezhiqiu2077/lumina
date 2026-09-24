@@ -4,7 +4,7 @@
 CE / Attention / GCE 三种训练目标，以及 `full_target` / `edit_region_hardlock` 两种 target
 corruption。提供数据处理、LoRA 微调、DDP、checkpoint 和 GT-mask 评测流程。
 
-完整 cold-start + formal workflow 见 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)。
+完整实验流程见 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)。
 
 ## 项目结构
 
@@ -166,4 +166,4 @@ uv run pytest -q
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 - [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)
-- [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)：当前 mixed 2×3 workflow
+- [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)
