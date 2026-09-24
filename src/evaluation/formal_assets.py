@@ -12,6 +12,8 @@ from dataset.utils import read_jsonl
 
 
 FORMAL_TRAIN_COUNTS = {"magicbrush": 8807, "refedit": 7804}
+FORMAL_TEST_SESSIONS = 535
+FORMAL_TEST_TURNS = 1053
 
 
 def sha256(path: Path) -> str:
@@ -111,6 +113,12 @@ def audit_test_assets(canonical_manifest: Path, token_manifest: Path, subset: Pa
     if metadata.get("split") != "test":
         raise ValueError(f"formal evaluation requires MagicBrush TEST metadata, got split={metadata.get('split')!r}")
     canonical_rows = read_jsonl(canonical_manifest)
+    if metadata.get("session_count") != FORMAL_TEST_SESSIONS or len(canonical_rows) != FORMAL_TEST_TURNS:
+        raise ValueError(
+            "REAL TEST ARCHIVE NOT VERIFIED: expected official MagicBrush TEST "
+            f"{FORMAL_TEST_SESSIONS} sessions / {FORMAL_TEST_TURNS} turns, got "
+            f"{metadata.get('session_count')} sessions / {len(canonical_rows)} turns"
+        )
     rows = read_jsonl(token_manifest)
     subset_rows = read_jsonl(subset)
     canonical_keys = [str(row.get("sample_key", "")) for row in canonical_rows]
@@ -136,6 +144,8 @@ def audit_test_assets(canonical_manifest: Path, token_manifest: Path, subset: Pa
         "token_manifest": {"path": str(token_manifest), "sha256": sha256(token_manifest), "sample_count": len(rows)},
         "eval_subset": {"path": str(subset), "sha256": sha256(subset), "sample_count": len(subset_rows)},
         "duplicate_sample_key_count": 0,
+        "official_session_count": FORMAL_TEST_SESSIONS,
+        "official_turn_count": FORMAL_TEST_TURNS,
     }
 
 

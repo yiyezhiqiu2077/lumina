@@ -80,10 +80,12 @@ def spatial_lpips_masked_mean(spatial_map: torch.Tensor, mask: np.ndarray) -> fl
     return float(values[0, 0][resized].mean().item())
 
 
-def lpips_scores_from_spatial_map(spatial_map: torch.Tensor, mask: np.ndarray) -> dict[str, float]:
-    """Keep canonical full LPIPS separate from the ROI spatial masked mean."""
-    values = torch.as_tensor(spatial_map).float()
-    return {"full_lpips": float(values.mean().item()), "roi_lpips": spatial_lpips_masked_mean(values, mask)}
+def lpips_scores(full_value: torch.Tensor, spatial_map: torch.Tensor, mask: np.ndarray) -> dict[str, float]:
+    """Keep canonical scalar full LPIPS separate from spatial masked ROI LPIPS."""
+    full = torch.as_tensor(full_value).float()
+    if full.numel() != 1:
+        raise ValueError("full LPIPS must be the canonical scalar [1,1,1,1] result")
+    return {"full_lpips": float(full.item()), "roi_lpips": spatial_lpips_masked_mean(spatial_map, mask)}
 
 
 def _image_tensor(image: Image.Image, device: torch.device) -> torch.Tensor:
@@ -121,14 +123,19 @@ class LPIPSMetric:
             raise RuntimeError("LPIPS was requested; install the eval extra with `uv sync --extra eval`.") from error
         self.device = device
         try:
-            self.model = lpips.LPIPS(net=net, spatial=True, pretrained=True, pnet_rand=False).to(device).eval()
+            # Full-image LPIPS has its own canonical scalar forward path.  ROI
+            # uses the spatial map; both modules explicitly share the same
+            # pretrained AlexNet trunk to avoid two feature extractors.
+            self.full_model = lpips.LPIPS(net=net, spatial=False, pretrained=True, pnet_rand=False).to(device).eval()
+            self.roi_model = lpips.LPIPS(net=net, spatial=True, pretrained=True, pnet_rand=False).to(device).eval()
+            self.roi_model.net = self.full_model.net
         except Exception as error:  # pragma: no cover - depends on local weight cache
             raise RuntimeError("failed to load pretrained LPIPS weights from the local cache") from error
 
     @torch.inference_mode()
     def scores(self, prediction: Image.Image, target: Image.Image, mask: np.ndarray) -> dict[str, float]:
-        values = self.model(_image_tensor(prediction, self.device), _image_tensor(target, self.device))
-        return lpips_scores_from_spatial_map(values, mask)
+        pred, target_tensor = _image_tensor(prediction, self.device), _image_tensor(target, self.device)
+        return lpips_scores(self.full_model(pred, target_tensor), self.roi_model(pred, target_tensor), mask)
 
 
 class DINOImageMetric:

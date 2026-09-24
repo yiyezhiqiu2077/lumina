@@ -16,11 +16,19 @@ from evaluation.formal_assets import (
     model_identity,
     sha256,
 )
+from dataset.formal_assets import load_formal_assets
+
+
+def _code_identity() -> dict:
+    root = Path(__file__).resolve().parents[2]
+    def git(*arguments: str) -> str:
+        return subprocess.check_output(["git", *arguments], cwd=root, text=True).strip()
+    return {"git_sha": git("rev-parse", "HEAD"), "git_dirty": bool(git("status", "--porcelain")), "uv_lock_sha256": sha256(root / "uv.lock")}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("train", "eval"), required=True)
+    parser.add_argument("--mode", choices=("train", "eval", "all"), required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--train-manifest", type=Path)
@@ -30,12 +38,15 @@ def main() -> None:
     parser.add_argument("--test-subset", type=Path)
     parser.add_argument("--dino-model", type=Path)
     parser.add_argument("--clip-model", type=Path)
+    parser.add_argument("--asset-config", type=Path, default=Path("configs/formal_assets.yaml"))
     args = parser.parse_args()
 
     output = Path(args.output)
     previous = json.loads(output.read_text(encoding="utf-8")) if output.is_file() else {}
+    previous["code"] = _code_identity()
+    previous["pinned_downloads"] = load_formal_assets(args.asset_config)
     previous["lumina"] = model_identity(args.model)
-    if args.mode == "train":
+    if args.mode in {"train", "all"}:
         if args.train_manifest is None or args.gce_clusters is None:
             parser.error("--mode train requires --train-manifest and --gce-clusters")
         previous["training"] = audit_training_manifest(args.train_manifest)
@@ -51,7 +62,7 @@ def main() -> None:
             "levels": [1024, 512],
             "inspection": json.loads(result.stdout),
         }
-    else:
+    if args.mode in {"eval", "all"}:
         required = (args.canonical_test_manifest, args.test_token_manifest, args.test_subset, args.dino_model, args.clip_model)
         if any(value is None for value in required):
             parser.error("--mode eval requires canonical/test-token/subset manifests plus --dino-model and --clip-model")

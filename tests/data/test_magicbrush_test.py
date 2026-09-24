@@ -63,3 +63,24 @@ def test_duplicate_canonical_test_sample_keys_fail(tmp_path):
     (root / "test.json").write_text(json.dumps([_record(), _record()]), encoding="utf-8")
     with pytest.raises(ValueError, match="duplicate_sample_key=1"):
         prepare_magicbrush_test(root, tmp_path / "canonical")
+
+
+def test_official_edit_sessions_layout_is_flattened_without_guessing_paths(tmp_path):
+    root = tmp_path / "MagicBrush-test"
+    for relative in ("images/source.png", "images/target.png", "masks/edit.png"):
+        _image(root / relative)
+    sessions = [{"img_id": "42", "edits": [{"instruction": "make it blue", "source": "images/source.png", "target": "images/target.png", "mask_edit": "masks/edit.png"}]}]
+    (root / "edit_sessions.json").write_text(json.dumps({"edit_sessions": sessions}), encoding="utf-8")
+    metadata = prepare_magicbrush_test(root, tmp_path / "canonical")
+    assert metadata["annotation_file"] == "edit_sessions.json"
+    assert metadata["sample_count"] == 1
+
+
+def test_empty_official_mask_fails(tmp_path):
+    root = tmp_path / "MagicBrush-test"
+    _image(root / "images/source.png"); _image(root / "images/target.png")
+    (root / "masks").mkdir(parents=True)
+    Image.new("L", (4, 4), 0).save(root / "masks/edit.png")
+    (root / "test.json").write_text(json.dumps([_record()]), encoding="utf-8")
+    with pytest.raises(ValueError, match="mask_edit is empty"):
+        prepare_magicbrush_test(root, tmp_path / "canonical")

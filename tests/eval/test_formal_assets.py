@@ -50,7 +50,7 @@ def test_dino_clip_identity_records_local_config_revision_and_weight_hash(tmp_pa
     assert identity["weights"]["single_weight"]["sha256"]
 
 
-def test_test_asset_audit_requires_test_metadata_unique_rows_and_existing_tokens(tmp_path):
+def test_test_asset_audit_rejects_unverified_official_test_count(tmp_path):
     canonical = tmp_path / "canonical" / "manifest.jsonl"
     canonical.parent.mkdir()
     canonical.write_text(json.dumps({"sample_key": "test-0"}) + "\n", encoding="utf-8")
@@ -62,6 +62,5 @@ def test_test_asset_audit_requires_test_metadata_unique_rows_and_existing_tokens
     tokens.write_text(json.dumps({"sample_key": "test-0", "token_file": "0.pt"}) + "\n", encoding="utf-8")
     subset = tmp_path / "eval_subset.jsonl"
     subset.write_text(json.dumps({"sample_key": "test-0", "token_file": "tokens/0.pt"}) + "\n", encoding="utf-8")
-    audit = audit_test_assets(canonical, tokens, subset)
-    assert audit["split"] == "test"
-    assert audit["token_manifest"]["sample_count"] == 1
+    with pytest.raises(ValueError, match="REAL TEST ARCHIVE NOT VERIFIED"):
+        audit_test_assets(canonical, tokens, subset)

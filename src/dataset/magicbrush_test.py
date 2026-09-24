@@ -8,11 +8,13 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+from PIL import Image
 from dataset.utils import write_jsonl
 
 
-PARSER_VERSION = "magicbrush-test-v1"
-ANNOTATION_NAMES = ("test.jsonl", "test.json", "metadata_test.jsonl", "metadata_test.json", "metadata.jsonl", "metadata.json")
+PARSER_VERSION = "magicbrush-test-v2"
+ANNOTATION_NAMES = ("edit_sessions.json", "test.jsonl", "test.json", "metadata_test.jsonl", "metadata_test.json", "metadata.jsonl", "metadata.json")
 FIELD_ALIASES = {
     "source": ("source", "source_image", "input", "input_image"),
     "target": ("target", "target_image", "output", "output_image", "edited_image"),
@@ -37,7 +39,22 @@ def _read_annotations(path: Path) -> list[dict[str, Any]]:
         values = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     else:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(payload, dict):
+        if path.name == "edit_sessions.json":
+            sessions = payload.get("edit_sessions", payload) if isinstance(payload, dict) else payload
+            if not isinstance(sessions, list):
+                raise ValueError("official edit_sessions.json must contain a session list")
+            values = []
+            for session_index, session in enumerate(sessions):
+                if not isinstance(session, dict):
+                    raise ValueError(f"edit session {session_index} is not an object")
+                turns = session.get("edits", session.get("turns"))
+                if not isinstance(turns, list):
+                    raise ValueError(f"edit session {session_index} has no explicit edits/turns list")
+                for turn_index, turn in enumerate(turns):
+                    if not isinstance(turn, dict):
+                        raise ValueError(f"edit session {session_index} turn {turn_index} is not an object")
+                    values.append({**session, **turn, "session_id": session.get("session_id", session.get("img_id")), "turn_index": turn.get("turn_index", turn_index)})
+        elif isinstance(payload, dict):
             candidates = [value for value in payload.values() if isinstance(value, list)]
             if len(candidates) != 1:
                 raise ValueError("test annotation JSON must contain exactly one list-valued record field")
@@ -121,7 +138,10 @@ def canonicalize_test_records(test_root: Path, records: list[dict[str, Any]]) ->
                     "instruction": instruction,
                 }
             )
-        except (TypeError, ValueError, FileNotFoundError) as error:
+            mask_path = root / canonical[-1]["mask_edit"]
+            if not bool((np.asarray(Image.open(mask_path).convert("L"), dtype=np.uint8) >= 128).any()):
+                raise ValueError("mask_edit is empty")
+        except (TypeError, ValueError, FileNotFoundError, OSError) as error:
             invalid.append(f"record {index}: {error}")
     duplicate_count = len(canonical) - len({row["sample_key"] for row in canonical})
     metadata = {

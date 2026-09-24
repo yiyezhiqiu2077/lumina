@@ -1,0 +1,29 @@
+# Pinned public inputs for the mixed 2x3 formal workflow.  Revisions are full
+# immutable Hugging Face commit ids; mirrors may be used but must resolve here.
+assets:
+  lumina:
+    repo_id: Alpha-VLLM/Lumina-DiMOO
+    revision: f014549e17679e41b119959754cdd9320af9bdc8
+    local_dir: models/Lumina-DiMOO
+  magicbrush:
+    repo_id: osunlp/MagicBrush
+    revision: 1d8d4629150d18ca50afab66391866f2085be989
+    split: train
+    expected_samples: 8807
+  refedit:
+    repo_id: TTangenty/refedit-final-mask
+    revision: 45028821c8d787b3532070d787e72f56d16796a0
+    expected_samples: 7804
+    local_dir: datasets/refedit/raw
+  dino:
+    repo_id: facebook/dinov2-base
+    revision: f9e44c814b77203eaa57a6bdbbd535f21ede1415
+    local_dir: models/dinov2-base
+  clip:
+    repo_id: openai/clip-vit-large-patch14
+    revision: 32bd64288804d66eefd0ccbe215aa642df71cc41
+    local_dir: models/clip-vit-large-patch14
+  lpips:
+    package_version: 0.1.4
+    net: alex
+    torchvision_weight: AlexNet_Weights.IMAGENET1K_V1

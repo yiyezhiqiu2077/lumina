@@ -1,134 +1,159 @@
 # Lumina-DiMOO Mixed Editing Experiments
 
-正式训练使用 MagicBrush train 8807 + RefEdit 7804；正式评测只使用官方 MagicBrush TEST。
-MagicBrush TEST 绝不进入训练，也不使用 MagicBrush train、dev 或 mixed training manifest 做正式评测。
+本页给出空服务器上的正式 Mixed 2×3 实验流程。除官方 MagicBrush TEST 外，模型、训练数据、token、GCE cluster 和评测权重均由仓库脚本下载或生成；不会复制旧服务器资产。
 
 ## 环境安装
 
 ```bash
 git clone git@github.com:yiyezhiqiu2077/lumina.git
 cd lumina
-git checkout <FORMAL_EXPERIMENT_CODE_SHA>
-uv sync --frozen --extra dev --extra upstream --extra analysis --extra eval
+uv sync --frozen --extra dev --extra upstream --extra analysis --extra eval --extra data
 ```
 
-## 本地资产
+网络受限可显式设 `HF_ENDPOINT=https://hf-mirror.com`；repo id、不可变 revision 和最终 hash 不变。
 
-模型、数据、权重与输出均保留在本机 `local_assets/` 或外部实验目录，不进入 Git。
+## 空服务器目录
 
 ```bash
-export PROJECT_ROOT=/path/to/lumina
-cd "$PROJECT_ROOT"
-
-bash scripts/setup_local_assets.sh model /path/to/Lumina-DiMOO
-bash scripts/setup_local_assets.sh mixed /path/to/mixed-token-root
-bash scripts/setup_local_assets.sh magicbrush-test /path/to/MagicBrush-test
-bash scripts/setup_local_assets.sh dino /path/to/dinov2-base
-bash scripts/setup_local_assets.sh clip /path/to/clip-vit-large-patch14
-
-export MODEL_PATH="$PROJECT_ROOT/local_assets/models/Lumina-DiMOO"
-export DATA_ROOT="$PROJECT_ROOT/local_assets/datasets/mixed"
-export DATA_CONFIG="$DATA_ROOT/train/manifest.jsonl"
-export GCE_CLUSTER_PATH=/path/to/gce_clusters_1024_512.pt
-export OUTPUT_ROOT=/path/to/experiments/lumina_mixed_2x3
-export EVAL_OUTPUT_ROOT=/path/to/experiments/lumina_mixed_2x3_eval
-export DINO_MODEL_PATH="$PROJECT_ROOT/local_assets/models/dinov2-base"
-export CLIP_MODEL_PATH="$PROJECT_ROOT/local_assets/models/clip-vit-large-patch14"
-mkdir -p "$OUTPUT_ROOT" "$EVAL_OUTPUT_ROOT"
+export PROJECT_ROOT=$PWD
+export ASSET_ROOT="$PROJECT_ROOT/local_assets"
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 ```
 
-当前 audited mixed manifest 为 MagicBrush 8807、RefEdit 7804、合计 16611。正式 launcher 会再次检查
-这三个数、`sample_key` 唯一性和每个 token file；`519 / 5190` 则仍由 `load_train_config()` 动态计算。
-
-## MagicBrush TEST 准备
-
-从官方渠道手工下载并解压 test archive：
-
-```bash
-export MAGICBRUSH_TEST_ROOT=/path/to/unpacked/MagicBrush-test
-export MAGICBRUSH_TEST_RAW="$PROJECT_ROOT/local_assets/datasets/magicbrush-test/canonical"
-export MAGICBRUSH_TEST_GEOMETRY="$PROJECT_ROOT/local_assets/datasets/magicbrush-test/geometry.jsonl"
-export MAGICBRUSH_TEST_TOKENS="$PROJECT_ROOT/local_assets/datasets/magicbrush-test/tokens"
-
-uv run python scripts/data/prepare_magicbrush_test.py \
-  --test-root "$MAGICBRUSH_TEST_ROOT" --output "$MAGICBRUSH_TEST_RAW"
-uv run python scripts/eval/prepare_magicbrush_eval.py \
-  --manifest "$MAGICBRUSH_TEST_RAW/manifest.jsonl" --output "$MAGICBRUSH_TEST_GEOMETRY"
-uv run python scripts/data/preprocess_magicbrush.py pretokenize \
-  --manifest "$MAGICBRUSH_TEST_GEOMETRY" --model "$MODEL_PATH" --output "$MAGICBRUSH_TEST_TOKENS"
-
-export MAGICBRUSH_TEST_CANONICAL_MANIFEST="$MAGICBRUSH_TEST_RAW/manifest.jsonl"
-export MAGICBRUSH_TEST_TOKEN_MANIFEST="$MAGICBRUSH_TEST_TOKENS/manifest.jsonl"
-export MAGICBRUSH_TEST_SUBSET="$PROJECT_ROOT/local_assets/datasets/magicbrush-test/eval_subset.jsonl"
-uv run python scripts/eval/evaluate_gt_mask_editing.py \
-  --manifest "$MAGICBRUSH_TEST_TOKEN_MANIFEST" --subset "$MAGICBRUSH_TEST_SUBSET" \
-  --prepare-subset-only --limit 0
+```text
+local_assets/
+├── models/
+├── datasets/{magicbrush,refedit,mixed,magicbrush-test}/
+├── artifacts/
+├── experiments/
+└── logs/
 ```
 
-`limit=0` 冻结所有 eligible test turns，并保留 canonical manifest 顺序。每个 multi-turn edit 都使用官方提供的
-该 turn source + instruction → target，当前协议不把模型上一轮输出接入下一轮。
+全部 pinned public assets 位于 `configs/formal_assets.yaml`，禁止用 `main` 或短 revision。
 
-## 正式配置
-
-| 项目 | 值 |
-| --- | --- |
-| GPU | 8 |
-| Batch / GPU | 4 |
-| Gradient Accumulation | 1 |
-| Global Batch | 32 |
-| Precision | BF16 |
-| Learning Rate | 3e-6 |
-| LoRA | r16 / alpha16 / dropout0.05 |
-| Loss Reduction | `token_mean` |
-| Epochs | 10 |
-
-| Objective | `full_target` | `edit_region_hardlock` |
-| --- | --- | --- |
-| CE | `mixed_ce_8g_b4_a1.yaml` | `mixed_ce_editregion_8g_b4_a1.yaml` |
-| Attention | `mixed_attention_postrope_region_8g_b4_a1.yaml` | `mixed_attention_editregion_8g_b4_a1.yaml` |
-| GCE | `mixed_gce_8g_b4_a1.yaml` | `mixed_gce_editregion_8g_b4_a1.yaml` |
-
-CE、Attention、GCE 的科学 recipe 固定在六份 YAML 中。Attention 使用 post-RoPE Q/K + `region_mass`；GCE
-使用 levels 1024 / 512。`edit_region_hardlock` 只监督本轮 MASK 的 GT-region token，Attention 使用完整 GT mask。
-
-## 资产审计与训练
-
-`run_mixed_2x3_formal.sh --run` 会先生成 `$OUTPUT_ROOT/formal_assets.json`，记录 mixed train manifest、
-Lumina/VQ tokenizer/weight SHA256、GCE cluster SHA256，以及当前 VQ codebook 的 GCE inspection。
+## 下载正式模型
 
 ```bash
+uv run python scripts/setup/download_formal_models.py --assets-root "$ASSET_ROOT"
+```
+
+下载器仅在完整 snapshot 且 `download_manifest.json` identity 一致时跳过；半完成目录不会被当作可用资产。
+
+## 准备 MagicBrush Train
+
+```bash
+uv run python scripts/data/download_magicbrush_train.py --assets-root "$ASSET_ROOT"
+uv run python scripts/data/download_magicbrush_train.py --assets-root "$ASSET_ROOT" --geometry-only
+torchrun --nproc_per_node=8 scripts/data/preprocess_magicbrush.py pretokenize \
+  --manifest "$ASSET_ROOT/datasets/magicbrush/prepared/train.jsonl" \
+  --model "$ASSET_ROOT/models/Lumina-DiMOO" --output "$ASSET_ROOT/datasets/magicbrush/tokens/train"
+```
+
+脚本读取 pinned `osunlp/MagicBrush` `train` split 的官方字段，严格要求 8807 条；训练不拆 MagicBrush train/dev/val。
+
+## 准备 RefEdit
+
+```bash
+uv run python scripts/data/download_refedit.py --assets-root "$ASSET_ROOT"
+uv run python scripts/data/preprocess_refedit.py audit --raw-root "$ASSET_ROOT/datasets/refedit/raw" --output "$ASSET_ROOT/datasets/refedit/audit"
+uv run python scripts/data/preprocess_refedit.py tokenize --raw-root "$ASSET_ROOT/datasets/refedit/raw" \
+  --model "$ASSET_ROOT/models/Lumina-DiMOO" --output "$ASSET_ROOT/datasets/refedit/tokens/train" --seed 42 --target-size 512
+```
+
+RefEdit 固定 revision，strict parser 后必须恰为 7804 条。
+
+## 构建 Mixed Tokens
+
+```bash
+uv run python scripts/data/build_mixed_edit_manifest.py \
+  --magicbrush-manifest "$ASSET_ROOT/datasets/magicbrush/tokens/train/manifest.jsonl" \
+  --refedit-manifest "$ASSET_ROOT/datasets/refedit/tokens/train/manifest.jsonl" --output "$ASSET_ROOT/datasets/mixed"
+```
+
+正式 manifest 必须为 MagicBrush 8807 + RefEdit 7804 = 16611，sample key 唯一、payload 均为 32×32。
+
+## 构建 GCE Cluster
+
+```bash
+uv run python scripts/tools/gce/build_clusters.py --model "$ASSET_ROOT/models/Lumina-DiMOO" \
+  --output "$ASSET_ROOT/artifacts/gce_clusters_1024_512.pt" --levels 1024 512 --seed 0
+```
+
+## 准备 MagicBrush TEST
+
+TEST archive 需要从官方 MagicBrush GitHub 渠道手工下载（密码 `MagicBrush`），不能上传或再分发：
+
+```bash
+export MAGICBRUSH_TEST_ROOT=/path/to/official/unpacked/test
+uv run python scripts/data/prepare_magicbrush_test.py --test-root "$MAGICBRUSH_TEST_ROOT" --output "$ASSET_ROOT/datasets/magicbrush-test/canonical"
+uv run python scripts/eval/prepare_magicbrush_eval.py --manifest "$ASSET_ROOT/datasets/magicbrush-test/canonical/manifest.jsonl" --output "$ASSET_ROOT/datasets/magicbrush-test/geometry.jsonl"
+torchrun --nproc_per_node=8 scripts/data/preprocess_magicbrush.py pretokenize --manifest "$ASSET_ROOT/datasets/magicbrush-test/geometry.jsonl" --model "$ASSET_ROOT/models/Lumina-DiMOO" --output "$ASSET_ROOT/datasets/magicbrush-test/tokens"
+```
+
+Importer 优先读取真实 `edit_sessions.json` 和 archive 内路径。若不是 535 sessions / 1053 turns，或存在重复、缺图、空 mask，审计明确报 `REAL TEST ARCHIVE NOT VERIFIED`。每个 turn 独立使用官方提供 source，不串接模型上一轮输出。
+
+## 准备评测权重
+
+```bash
+uv run python scripts/setup/download_formal_models.py --assets-root "$ASSET_ROOT" --only dino --only clip
+uv run python scripts/setup/prefetch_lpips.py --assets-root "$ASSET_ROOT"
+```
+
+## 资产审计
+
+一键准备支持失败停止、阶段 `_SUCCESS` marker、验证后跳过与任意 cwd：
+
+```bash
+bash scripts/setup/run_formal_prepare.sh --print-command
+bash scripts/setup/run_formal_prepare.sh --run
+```
+
+顺序为 environment、models、MagicBrush train、geometry、tokens、RefEdit、mixed、GCE、metrics、LPIPS、TEST、TEST token、final audit。`formal_assets.json` 记录 code SHA、dirty、`uv.lock`、assets、token、GCE 和 metrics 的 identity/hash。
+
+## 六组正式训练
+
+```bash
+export MODEL_PATH="$ASSET_ROOT/models/Lumina-DiMOO"
+export DATA_ROOT="$ASSET_ROOT/datasets/mixed"
+export DATA_CONFIG="$DATA_ROOT/train/manifest.jsonl"
+export GCE_CLUSTER_PATH="$ASSET_ROOT/artifacts/gce_clusters_1024_512.pt"
+export OUTPUT_ROOT="$ASSET_ROOT/experiments/lumina_mixed_2x3"
 bash scripts/train/run_mixed_2x3_formal.sh --print-command
 bash scripts/train/run_mixed_2x3_formal.sh --run
 ```
 
-顺序固定为 CE full → CE editregion → Attention full → Attention editregion → GCE full → GCE editregion；
-任一组未通过 quality、last metric 和 final checkpoint success gate，pipeline 立即停止。
+顺序固定 CE full → CE editregion → Attention full → Attention editregion → GCE full → GCE editregion。六份 YAML 的 LR、batch、epochs、`token_mean`、loss 权重及 corruption semantics 均不由该流程改变。
 
-## 正式评测
-
-正式 evaluation launcher 固定复用同一个 `MAGICBRUSH_TEST_TOKEN_MANIFEST`、`MAGICBRUSH_TEST_SUBSET`、
-sampling 参数、DINO checkpoint、CLIP checkpoint、LPIPS alex 和 ROI padding 0.10。
+## MagicBrush TEST 评测
 
 ```bash
+export EVAL_OUTPUT_ROOT="$ASSET_ROOT/experiments/lumina_mixed_2x3_eval"
+export MAGICBRUSH_TEST_CANONICAL_MANIFEST="$ASSET_ROOT/datasets/magicbrush-test/canonical/manifest.jsonl"
+export MAGICBRUSH_TEST_TOKEN_MANIFEST="$ASSET_ROOT/datasets/magicbrush-test/tokens/manifest.jsonl"
+export MAGICBRUSH_TEST_SUBSET="$ASSET_ROOT/datasets/magicbrush-test/eval_subset.jsonl"
+export DINO_MODEL_PATH="$ASSET_ROOT/models/dinov2-base"
+export CLIP_MODEL_PATH="$ASSET_ROOT/models/clip-vit-large-patch14"
 bash scripts/eval/run_mixed_2x3_eval.sh --print-command
 bash scripts/eval/run_mixed_2x3_eval.sh --run
 ```
 
-它会评测六个动态解析出的 final checkpoint，并在 `$EVAL_OUTPUT_ROOT` 写入独立目录和 comparison。评测时会更新
-`$OUTPUT_ROOT/formal_assets.json`：MagicBrush TEST canonical/token/subset SHA256、样本数、DINO/CLIP 的固定 model id、
-local revision/config/weight SHA256、LPIPS 版本与 AlexNet checkpoint SHA256。
+Full LPIPS 为 canonical `LPIPS(alex, spatial=False)`；ROI LPIPS 为 `spatial=True` map 的 GT-mask 均值。DINO/CLIP ROI 采用同一 GT-mask bbox 加 10% context。
 
-Token：Source-copy Token Accuracy、Edit Token Accuracy、Changed-token Accuracy。
+## 结果比较
 
-Pixel：Inside L1 / MSE / PSNR、Inside L1 vs Target Reconstruction、Boundary L1、Full L1 / MSE / PSNR。
+评测输出六组 summary、per-sample JSONL 与 comparison JSON/CSV。只使用同一 1053-turn TEST、相同 seed、sampling、metric weights 与 ROI padding。
 
-Perceptual / Semantic：ROI LPIPS ↓、ROI DINO-I ↑、ROI CLIP-I ↑、Full LPIPS ↓、Full DINO-I ↑、Full CLIP-I ↑。
-ROI 是 GT-mask hard-lock 的主要感知/语义比较：LPIPS 在空间距离图的 mask 内均值；DINO/CLIP 使用同一 GT-mask bbox
-加 10% context crop。Full 指标保留完整图像参考。所有权重均本地加载，禁止 floating 或随机 LPIPS backbone。
+## 轻量结果打包
+
+```bash
+uv run python scripts/tools/package_formal_results.py --train-root "$OUTPUT_ROOT" --eval-root "$EVAL_OUTPUT_ROOT" --output "$ASSET_ROOT/archives/lumina_mixed_2x3_results.tar.gz"
+```
+
+仅白名单配置、provenance、quality、summary、gzip JSONL、comparison 和 manifest；checkpoint、weights、token、raw data、images、cache 均排除。超过 50 MiB 明确失败。
 
 ## 测试
 
 ```bash
 uv run pytest -q
+uv run python -m compileall src scripts tests
 ```
