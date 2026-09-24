@@ -1,6 +1,6 @@
 # Lumina-DiMOO Mixed Editing Experiments
 
-本页给出空服务器上的正式 Mixed 2×3 实验流程。模型、训练数据、官方 MagicBrush TEST、token、GCE cluster 和评测权重均由仓库脚本下载或生成。
+本页给出空服务器上的正式实验流程。模型、训练数据、官方 MagicBrush TEST、token、GCE cluster 和评测权重均由仓库脚本下载或生成。
 
 ## 环境安装
 
