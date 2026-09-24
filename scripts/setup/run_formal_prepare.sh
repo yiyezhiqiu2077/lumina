@@ -53,10 +53,13 @@ if [[ "$scope" != eval ]]; then
   run_stage lpips "${python_cmd[@]}" "$root/scripts/setup/prefetch_lpips.py" --assets-root "$assets_root"
 fi
 if [[ "$scope" != train ]]; then
-  # The official test archive is intentionally manual.  This stage must fail
-  # clearly until MAGICBRUSH_TEST_ROOT names the real unpacked archive.
-  if [[ "$mode" == run ]]; then : "${MAGICBRUSH_TEST_ROOT:?REAL TEST ARCHIVE NOT VERIFIED: set MAGICBRUSH_TEST_ROOT to the official archive}"; else MAGICBRUSH_TEST_ROOT='${MAGICBRUSH_TEST_ROOT}'; fi
-  run_stage magicbrush_test "${python_cmd[@]}" "$root/scripts/data/prepare_magicbrush_test.py" --test-root "$MAGICBRUSH_TEST_ROOT" --output "$assets_root/datasets/magicbrush-test/canonical"
+  if [[ -n "${MAGICBRUSH_TEST_ARCHIVE:-}" ]]; then
+    run_stage magicbrush_test_download "${python_cmd[@]}" "$root/scripts/data/download_magicbrush_test.py" --archive "$MAGICBRUSH_TEST_ARCHIVE" --output "$assets_root/datasets/magicbrush-test/raw"
+  else
+    run_stage magicbrush_test_browser uv run playwright install chromium
+    run_stage magicbrush_test_download "${python_cmd[@]}" "$root/scripts/data/download_magicbrush_test.py" --output "$assets_root/datasets/magicbrush-test/raw"
+  fi
+  run_stage magicbrush_test_prepare "${python_cmd[@]}" "$root/scripts/data/prepare_magicbrush_test.py" --test-root "$assets_root/datasets/magicbrush-test/raw" --output "$assets_root/datasets/magicbrush-test/canonical"
   run_stage test_geometry "${python_cmd[@]}" "$root/scripts/eval/prepare_magicbrush_eval.py" --manifest "$assets_root/datasets/magicbrush-test/canonical/manifest.jsonl" --output "$assets_root/datasets/magicbrush-test/geometry.jsonl" --seed 42 --target-size 512
   run_stage test_tokenize torchrun --nproc_per_node="${TOKENIZE_GPUS:-8}" "$root/scripts/data/preprocess_magicbrush.py" pretokenize --manifest "$assets_root/datasets/magicbrush-test/geometry.jsonl" --model "$assets_root/models/Lumina-DiMOO" --output "$assets_root/datasets/magicbrush-test/tokens"
   run_stage test_subset "${python_cmd[@]}" "$root/scripts/eval/evaluate_gt_mask_editing.py" --manifest "$assets_root/datasets/magicbrush-test/tokens/manifest.jsonl" --subset "$assets_root/datasets/magicbrush-test/eval_subset.jsonl" --prepare-subset-only --limit 0 --seed 42

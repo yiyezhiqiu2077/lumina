@@ -1,6 +1,6 @@
 # Lumina-DiMOO Mixed Editing Experiments
 
-本页给出空服务器上的正式 Mixed 2×3 实验流程。除官方 MagicBrush TEST 外，模型、训练数据、token、GCE cluster 和评测权重均由仓库脚本下载或生成
+本页给出空服务器上的正式 Mixed 2×3 实验流程。模型、训练数据、官方 MagicBrush TEST、token、GCE cluster 和评测权重均由仓库脚本下载或生成。
 
 ## 环境安装
 
@@ -81,16 +81,27 @@ uv run python scripts/tools/gce/build_clusters.py --model "$ASSET_ROOT/models/Lu
 
 ## 准备 MagicBrush TEST
 
-TEST archive 需要从官方 MagicBrush GitHub 渠道手工下载（密码 `MagicBrush`），不能上传或再分发：
+仓库默认通过 MagicBrush 官方 SharePoint 自动获取受公开密码保护的 TEST archive，并仅解压到 `local_assets/`；不得上传、镜像或重新分发该 TEST 数据。
 
 ```bash
-export MAGICBRUSH_TEST_ROOT=/path/to/official/unpacked/test
-uv run python scripts/data/prepare_magicbrush_test.py --test-root "$MAGICBRUSH_TEST_ROOT" --output "$ASSET_ROOT/datasets/magicbrush-test/canonical"
+uv run python scripts/data/download_magicbrush_test.py \
+  --output "$ASSET_ROOT/datasets/magicbrush-test/raw"
+uv run python scripts/data/prepare_magicbrush_test.py \
+  --test-root "$ASSET_ROOT/datasets/magicbrush-test/raw" \
+  --output "$ASSET_ROOT/datasets/magicbrush-test/canonical"
 uv run python scripts/eval/prepare_magicbrush_eval.py --manifest "$ASSET_ROOT/datasets/magicbrush-test/canonical/manifest.jsonl" --output "$ASSET_ROOT/datasets/magicbrush-test/geometry.jsonl"
 torchrun --nproc_per_node=8 scripts/data/preprocess_magicbrush.py pretokenize --manifest "$ASSET_ROOT/datasets/magicbrush-test/geometry.jsonl" --model "$ASSET_ROOT/models/Lumina-DiMOO" --output "$ASSET_ROOT/datasets/magicbrush-test/tokens"
 ```
 
-Importer 优先读取真实 `edit_sessions.json` 和 archive 内路径。若不是 535 sessions / 1053 turns，或存在重复、缺图、空 mask，审计明确报 `REAL TEST ARCHIVE NOT VERIFIED`。每个 turn 独立使用官方提供 source，不串接模型上一轮输出。
+离线 fallback 不访问网络，只校验、解压并记录本地官方 archive 的 provenance：
+
+```bash
+uv run python scripts/data/download_magicbrush_test.py \
+  --archive /path/to/official/test.zip \
+  --output "$ASSET_ROOT/datasets/magicbrush-test/raw"
+```
+
+Downloader 会拒绝 ZIP path traversal 或不完整下载；成功后写入 archive SHA256、大小和 source URL。Importer 优先读取真实 `edit_sessions.json` 和 archive 内路径。若不是 535 sessions / 1053 turns，或存在重复、缺图、空 mask，审计明确报 `REAL TEST ARCHIVE NOT VERIFIED`。每个 turn 独立使用官方提供 source，不串接模型上一轮输出。
 
 ## 准备评测权重
 
@@ -108,7 +119,7 @@ bash scripts/setup/run_formal_prepare.sh --print-command
 bash scripts/setup/run_formal_prepare.sh --run
 ```
 
-顺序为 environment、models、MagicBrush train、geometry、tokens、RefEdit、mixed、GCE、metrics、LPIPS、TEST、TEST token、final audit。`formal_assets.json` 记录 code SHA、dirty、`uv.lock`、assets、token、GCE 和 metrics 的 identity/hash。
+顺序为 environment、models、MagicBrush train、geometry、tokens、RefEdit、mixed、GCE、metrics、LPIPS、Chromium、TEST download、TEST prepare、TEST token、final audit。设置 `MAGICBRUSH_TEST_ARCHIVE=/path/to/official/test.zip` 时 pipeline 自动走离线 fallback。`formal_assets.json` 记录 code SHA、dirty、`uv.lock`、assets、token、GCE 和 metrics 的 identity/hash。
 
 ## 六组正式训练
 

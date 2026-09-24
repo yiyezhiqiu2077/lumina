@@ -73,7 +73,7 @@ def discover_test_annotations(test_root: Path, annotations: Path | None = None) 
         if not candidate.is_file():
             raise FileNotFoundError(f"explicit test annotation file does not exist: {candidate}")
         return candidate
-    candidates = [root / name for name in ANNOTATION_NAMES if (root / name).is_file()]
+    candidates = sorted({path for name in ANNOTATION_NAMES for path in root.rglob(name) if path.is_file()})
     if len(candidates) != 1:
         raise ValueError(
             "cannot uniquely identify official MagicBrush test annotations; expected exactly one of "
@@ -165,11 +165,13 @@ def canonicalize_test_records(test_root: Path, records: list[dict[str, Any]]) ->
 
 
 def prepare_magicbrush_test(test_root: Path, output: Path, *, annotations: Path | None = None) -> dict[str, Any]:
-    root = Path(test_root).resolve()
-    annotation_path = discover_test_annotations(root, annotations)
+    extraction_root = Path(test_root).resolve()
+    annotation_path = discover_test_annotations(extraction_root, annotations)
+    root = annotation_path.parent
     rows, metadata = canonicalize_test_records(root, _read_annotations(annotation_path))
-    metadata["annotation_file"] = str(annotation_path.relative_to(root))
+    metadata["annotation_file"] = str(annotation_path.relative_to(extraction_root))
     metadata["annotation_sha256"] = _sha256(annotation_path)
+    metadata["archive_content_root"] = str(root.relative_to(extraction_root))
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     # Canonical manifests are portable relative to their own location, not tied

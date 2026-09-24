@@ -76,6 +76,15 @@ def test_official_edit_sessions_layout_is_flattened_without_guessing_paths(tmp_p
     assert metadata["sample_count"] == 1
 
 
+def test_nested_archive_wrapper_is_discovered(tmp_path):
+    root = tmp_path / "raw" / "official-wrapper"
+    for relative in ("images/source.png", "images/target.png", "masks/edit.png"):
+        _image(root / relative)
+    (root / "test.json").write_text(json.dumps([_record()]), encoding="utf-8")
+    metadata = prepare_magicbrush_test(root.parent, tmp_path / "canonical")
+    assert metadata["archive_content_root"] == "official-wrapper"
+
+
 def test_empty_official_mask_fails(tmp_path):
     root = tmp_path / "MagicBrush-test"
     _image(root / "images/source.png"); _image(root / "images/target.png")
