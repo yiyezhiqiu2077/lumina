@@ -1,6 +1,6 @@
 # Lumina-DiMOO Mixed Editing Experiments
 
-本页给出空服务器上的正式 Mixed 2×3 实验流程。模型、训练数据、官方 MagicBrush TEST、token、GCE cluster 和评测权重均由仓库脚本下载或生成。
+本页给出空服务器上的正式实验流程。模型、训练数据、官方 MagicBrush TEST、token、GCE cluster 和评测权重均由仓库脚本下载或生成。
 
 ## 环境安装
 
@@ -30,7 +30,7 @@ local_assets/
 └── logs/
 ```
 
-全部 pinned public assets 位于 `configs/formal_assets.yaml`，禁止用 `main` 或短 revision。
+全部 pinned public assets 位于 `configs/formal_assets.yaml`。
 
 ## 资产审计
 
@@ -72,8 +72,6 @@ bash scripts/eval/run_mixed_2x3_eval.sh --print-command
 bash scripts/eval/run_mixed_2x3_eval.sh --run
 ```
 
-Full LPIPS 为 canonical `LPIPS(alex, spatial=False)`；ROI LPIPS 为 `spatial=True` map 的 GT-mask 均值。DINO/CLIP ROI 采用同一 GT-mask bbox 加 10% context。
-
 ## 结果比较
 
 评测输出六组 summary、per-sample JSONL 与 comparison JSON/CSV。只使用同一 1053-turn TEST、相同 seed、sampling、metric weights 与 ROI padding。
@@ -84,7 +82,7 @@ Full LPIPS 为 canonical `LPIPS(alex, spatial=False)`；ROI LPIPS 为 `spatial=T
 uv run python scripts/tools/package_formal_results.py --train-root "$OUTPUT_ROOT" --eval-root "$EVAL_OUTPUT_ROOT" --formal-assets "$ASSET_ROOT/artifacts/formal_assets.json" --output "$ASSET_ROOT/archives/lumina_mixed_2x3_results.tar.gz"
 ```
 
-仅白名单配置、provenance、quality、summary、gzip JSONL、comparison 和 manifest；checkpoint、weights、token、raw data、images、cache 均排除。超过 50 MiB 明确失败。
+checkpoint、weights、token、raw data、images、cache 均排除。超过 50 MiB 明确失败。
 
 ## 测试
 
