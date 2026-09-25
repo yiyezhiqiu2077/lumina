@@ -21,17 +21,22 @@ def required_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("DATA_ROOT", "/tmp/data")
     monkeypatch.setenv("OUTPUT_ROOT", str(tmp_path / "outputs"))
     monkeypatch.setenv("GCE_CLUSTER_PATH", "/tmp/gce_clusters.pt")
+    manifest = tmp_path / "data" / "mixed" / "train" / "manifest.jsonl"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("{}\n" * 16611, encoding="utf-8")
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path / "data"))
+    monkeypatch.setenv("DATA_CONFIG", str(manifest))
 
 
 def _load(name: str):
-    return load_train_config(REPOSITORY / "configs/train" / name)
+    return load_train_config(REPOSITORY / "configs/train/validation" / name)
 
 
 def test_train_configs_define_actual_launch_world_sizes():
     expected = {
-        "magicbrush_ce.yaml": (4, 4, 2, 32),
-        "magicbrush_attention.yaml": (2, 8, 4, 64),
-        "magicbrush_gce.yaml": (4, 4, 2, 32),
+        "mixed_ce_4g.yaml": (4, 4, 2, 32),
+        "mixed_attention_4g.yaml": (4, 4, 2, 32),
+        "mixed_gce_4g.yaml": (4, 4, 2, 32),
     }
     for name, values in expected.items():
         args = _load(name)
@@ -39,12 +44,12 @@ def test_train_configs_define_actual_launch_world_sizes():
 
 
 def test_torchrun_command_and_resume_are_preserved(tmp_path):
-    args = _load("magicbrush_attention.yaml")
+    args = _load("mixed_attention_4g.yaml")
     resume = tmp_path / "checkpoint-000001"
     command = build_torchrun_command(args, REPOSITORY / "scripts/train/train.py", args.config_file, resume)
     assert command[:3] == [command[0], "-m", "torch.distributed.run"]
     assert "--standalone" in command
-    assert command[command.index("--nproc_per_node") + 1] == "2"
+    assert command[command.index("--nproc_per_node") + 1] == "4"
     assert command[command.index("--resume-from-checkpoint") + 1] == str(resume)
     assert "--distributed-worker" in command
 

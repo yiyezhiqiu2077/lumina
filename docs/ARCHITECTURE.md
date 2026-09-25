@@ -14,11 +14,11 @@
 
 ## 入口与配置
 
-- `scripts/train/train.py`：唯一 MagicBrush CE/attention/GCE 训练入口。
+- `scripts/train/train.py`：唯一 mixed CE/attention/GCE 训练入口。
 - `scripts/train/upstream/`：保留的原始 Lumina SFT CLI。
 - `scripts/inference/`：T2I、I2I、MMU 与 DDP T2I CLI。
 - `scripts/data/`：MagicBrush 和通用 pre-tokenizer CLI。
-- `configs/train/`、`configs/dataset/`、`configs/distributed/`：MagicBrush 配置；
+- `configs/train/`、`configs/dataset/`、`configs/distributed/`：mixed formal/validation 配置；
   `configs/upstream/`：上游 SFT 示例。
 
 ## 依赖方向
