@@ -136,13 +136,9 @@ scripts/eval/evaluate_gt_mask_editing.py
 
 当前核心指标：
 
-- Source-copy Token Accuracy
-- Edit Token Accuracy
-- Changed-token Accuracy
+
 - Inside L1
 - Inside PSNR
-- Inside L1 vs Target Reconstruction
-- Oracle hard-lock diagnostic
 - ROI / Full LPIPS
 - ROI / Full DINO-I
 - ROI / Full CLIP-I
