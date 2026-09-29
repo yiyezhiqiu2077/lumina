@@ -12,6 +12,7 @@ from dataset.utils import read_jsonl
 
 
 FORMAL_TRAIN_COUNTS = {"magicbrush": 8807, "refedit": 7804}
+FORMAL_TRAIN_DATASETS = ("magicbrush", "refedit", "crispedit", "scaleedit")
 FORMAL_TEST_SESSIONS = 535
 FORMAL_TEST_TURNS = 1053
 
@@ -68,24 +69,72 @@ def model_identity(model: Path) -> dict[str, Any]:
     }
 
 
+def _mixed4_expected_counts(metadata_path: Path, manifest: Path) -> tuple[dict[str, int], dict[str, Any]]:
+    metadata_path = Path(metadata_path).resolve()
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    component = metadata.get("component_manifests", {})
+    declared = metadata.get("dataset_counts", {})
+    if set(component) != set(FORMAL_TRAIN_DATASETS) or set(declared) != set(FORMAL_TRAIN_DATASETS):
+        raise ValueError("Mixed-4 metadata must contain exactly magicbrush/refedit/crispedit/scaleedit")
+    if int(declared["magicbrush"]) != FORMAL_TRAIN_COUNTS["magicbrush"] or int(declared["refedit"]) != FORMAL_TRAIN_COUNTS["refedit"]:
+        raise ValueError("Mixed-4 metadata changed the fixed MagicBrush/RefEdit formal counts")
+    expected = {name: int(declared[name]) for name in FORMAL_TRAIN_DATASETS}
+    if any(expected[name] <= 0 for name in ("crispedit", "scaleedit")):
+        raise ValueError("CrispEdit and ScaleEdit strict usable counts must be positive")
+    for name in ("crispedit", "scaleedit"):
+        item = component[name]
+        token_meta = Path(item["tokenization_metadata"])
+        if not token_meta.is_file() or item.get("tokenization_metadata_sha256") != sha256(token_meta):
+            raise ValueError(f"{name} tokenization metadata identity mismatch")
+        token_payload = json.loads(token_meta.read_text(encoding="utf-8"))
+        if int(token_payload.get("usable_row_count", -1)) != expected[name]:
+            raise ValueError(f"{name} count does not match tokenization metadata")
+    if metadata.get("duplicate_sample_key_count") != 0:
+        raise ValueError("Mixed-4 metadata reports duplicate sample keys")
+    if metadata.get("manifest") and Path(metadata["manifest"]).resolve() != manifest:
+        raise ValueError("Mixed-4 metadata manifest path does not match audited manifest")
+    return expected, {"path": str(metadata_path), "sha256": sha256(metadata_path), "dataset_counts": expected}
+
+
 def audit_training_manifest(
-    manifest: Path, *, expected_counts: dict[str, int] | None = None, require_token_files: bool = True,
+    manifest: Path, *, expected_counts: dict[str, int] | None = None, mixed_metadata: Path | None = None,
+    require_token_files: bool = True,
 ) -> dict[str, Any]:
-    """Require the frozen 8807/7804 composition and portable token-file integrity."""
+    """Audit portable token integrity and the fixed/dynamic Mixed-4 composition."""
     manifest = Path(manifest).resolve()
     rows = read_jsonl(manifest)
-    expected = expected_counts or FORMAL_TRAIN_COUNTS
+    metadata_identity = None
+    if mixed_metadata is not None:
+        expected, metadata_identity = _mixed4_expected_counts(mixed_metadata, manifest)
+    else:
+        expected = expected_counts or FORMAL_TRAIN_COUNTS
     counts = Counter(str(row.get("dataset_name", "")) for row in rows)
     keys = [str(row.get("sample_key", "")) for row in rows]
     duplicate_count = len(keys) - len(set(keys))
     missing_tokens: list[str] = []
+    invalid_payloads: list[str] = []
     if require_token_files:
+        import torch
         for row in rows:
             token = Path(str(row.get("token_file", "")))
             token = token if token.is_absolute() else manifest.parent / token
             if not token.is_file():
                 missing_tokens.append(str(token))
                 if len(missing_tokens) >= 3:
+                    break
+                continue
+            try:
+                payload = torch.load(token, map_location="cpu", weights_only=True)
+                valid = (tuple(payload.get("source_codes").shape) == (32, 32)
+                         and tuple(payload.get("target_codes").shape) == (32, 32)
+                         and tuple(payload.get("edit_mask").shape) == (32, 32)
+                         and bool(payload["edit_mask"].any())
+                         and payload.get("token_height") == 32 and payload.get("token_width") == 32)
+            except Exception:
+                valid = False
+            if not valid:
+                invalid_payloads.append(str(token))
+                if len(invalid_payloads) >= 3:
                     break
     result = {
         "manifest": str(manifest),
@@ -94,12 +143,15 @@ def audit_training_manifest(
         "total": len(rows),
         "duplicate_sample_key_count": duplicate_count,
         "missing_token_files": missing_tokens,
+        "invalid_token_payloads": invalid_payloads,
     }
-    if dict(counts) != expected or len(rows) != sum(expected.values()) or duplicate_count or missing_tokens:
+    if metadata_identity is not None:
+        result["mixed4_metadata"] = metadata_identity
+    if dict(counts) != expected or len(rows) != sum(expected.values()) or duplicate_count or missing_tokens or invalid_payloads:
         raise ValueError(
             "formal training manifest composition gate failed: "
             f"expected={expected} actual={dict(counts)} total={len(rows)} "
-            f"duplicate_sample_key={duplicate_count} missing_token_files={missing_tokens}"
+            f"duplicate_sample_key={duplicate_count} missing_token_files={missing_tokens} invalid_token_payloads={invalid_payloads}"
         )
     return result
 

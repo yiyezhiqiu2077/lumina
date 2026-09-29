@@ -23,7 +23,7 @@ def required_environment(monkeypatch, tmp_path):
     monkeypatch.setenv("GCE_CLUSTER_PATH", "/tmp/gce_clusters.pt")
     manifest = tmp_path / "data" / "mixed" / "train" / "manifest.jsonl"
     manifest.parent.mkdir(parents=True)
-    manifest.write_text("{}\n" * 16611, encoding="utf-8")
+    manifest.write_text("{}\n" * 4099, encoding="utf-8")
     monkeypatch.setenv("DATA_ROOT", str(tmp_path / "data"))
     monkeypatch.setenv("DATA_CONFIG", str(manifest))
 

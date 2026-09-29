@@ -96,11 +96,11 @@ configs/train/ablation/
 | Learning Rate | 3e-6 |
 | LoRA Rank | 16 |
 | Loss Reduction | `token_mean` |
-| Training Epochs | 10 |
-| Steps / Epoch | 519 |
-| Formal Steps | 5190 |
+| Training Epochs | 4 |
+| Steps / Epoch | manifest-derived |
+| Formal Steps | `4 × manifest-derived steps/epoch` |
 
-`519 / 5190` 对应当前 audited 的 16611-sample mixed manifest，不是硬编码通用值。
+每 epoch 的 optimizer steps 从 audited Mixed-4 manifest 推导，不是硬编码通用值。
 
 - CE：`L_total = L_gen + 1e-5 L_z`
 - Attention：`L_total = L_gen + 1e-5 L_z + 0.3 L_attn`

@@ -6,6 +6,12 @@ import torch
 import training.distributed as distributed
 
 
+def test_corruption_diagnostics_follow_the_active_mixed4_manifest():
+    assert distributed.corruption_diagnostic_groups(
+        ["scaleedit", "magicbrush", "crispedit", "refedit", "magicbrush"]
+    ) == ("overall", "crispedit", "magicbrush", "refedit", "scaleedit")
+
+
 def test_scaled_auxiliary_gradient_vectors_preserve_exact_weighting():
     raw = (torch.tensor([1.0, -2.0]), None, torch.tensor([3.0]))
     weighted = distributed.scale_reduced_auxiliary_gradients(raw, 0.3)

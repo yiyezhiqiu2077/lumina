@@ -357,6 +357,11 @@ def _quality_failure_message(local_message: str | None, device: torch.device) ->
     return next(message for message in messages if message is not None)
 
 
+def corruption_diagnostic_groups(dataset_names) -> tuple[str, ...]:
+    """Return stable per-dataset diagnostic groups for the active manifest."""
+    return ("overall", *sorted({str(name).lower() for name in dataset_names}))
+
+
 def run(args):
     dist.init_process_group("nccl")
     rank = dist.get_rank()
@@ -380,10 +385,6 @@ def run(args):
         "masked_edit_fraction",
         "valid_target_token_sum",
     )
-    corruption_sums = {
-        group: {field: torch.zeros((), device=device) for field in corruption_fields}
-        for group in ("overall", "magicbrush", "refedit")
-    }
     runtime_dtype = torch.bfloat16
     seed_all(args.seed + rank)
     args.output.mkdir(parents=True, exist_ok=True)
@@ -451,6 +452,10 @@ def run(args):
     dataset_composition = Counter(
         str(row.get("dataset_name", "magicbrush")) for row in dataset.rows
     )
+    corruption_sums = {
+        group: {field: torch.zeros((), device=device) for field in corruption_fields}
+        for group in corruption_diagnostic_groups(dataset_composition)
+    }
     sampler = DistributedSampler(dataset, shuffle=True, seed=args.seed, drop_last=True)
     loader = DataLoader(
         dataset,

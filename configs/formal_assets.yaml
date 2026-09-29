@@ -15,6 +15,14 @@ assets:
     revision: 45028821c8d787b3532070d787e72f56d16796a0
     expected_samples: 7804
     local_dir: datasets/refedit/raw
+  crispedit:
+    repo_id: TTangenty/CrispEdit-labeling-39k
+    revision: dcbd1c952e93e4361ad862b33f3acd1cc74bec5a
+    local_dir: datasets/crispedit/raw
+  scaleedit:
+    repo_id: TTangenty/ScaleEdit-labeling-25k
+    revision: f97ffb061d4275bcbbff6500572139b6f8df1c4e
+    local_dir: datasets/scaleedit/raw
   dino:
     repo_id: facebook/dinov2-base
     revision: f9e44c814b77203eaa57a6bdbbd535f21ede1415

@@ -37,9 +37,9 @@ def formal_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
     data_root = tmp_path / "data"
     data_root.mkdir()
     manifest = data_root / "manifest.jsonl"
-    # 50 optimizer steps/epoch × 10 epochs: enough for formal quality-gate
+    # 100 optimizer steps/epoch × 4 formal epochs: enough for quality-gate
     # validation while remaining a synthetic manifest.
-    manifest.write_text("".join('{"id": %d}\n' % index for index in range(1600)), encoding="utf-8")
+    manifest.write_text("".join('{"id": %d}\n' % index for index in range(3200)), encoding="utf-8")
     output_root = tmp_path / "outputs"
     output_root.mkdir()
     gce = tmp_path / "gce_clusters.pt"
@@ -63,7 +63,7 @@ outputs = json.loads(os.environ["FAKE_OUTPUTS"])
 out = Path(os.environ["OUTPUT_ROOT"]) / outputs[name]
 out.mkdir(parents=True, exist_ok=True)
 scenario = os.environ.get("FAKE_SCENARIO", "success")
-step = 500
+step = 400
 status = "SUCCEEDED"
 metric_step = step
 make_checkpoint = True
@@ -74,7 +74,7 @@ elif scenario == "checkpoint_failure": make_checkpoint = False
 (out / "quality_status.json").write_text(json.dumps({"status": status, "step": step}) + "\\n")
 (out / "train_metrics.jsonl").write_text(json.dumps({"step": metric_step}) + "\\n")
 if make_checkpoint:
-    checkpoint = out / "checkpoint-000500"
+    checkpoint = out / "checkpoint-000400"
     checkpoint.mkdir(exist_ok=True)
     (checkpoint / "_SUCCESS").write_text("ok\\n")
 PY

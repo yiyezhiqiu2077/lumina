@@ -32,6 +32,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--train-manifest", type=Path)
+    parser.add_argument("--mixed-metadata", type=Path)
     parser.add_argument("--gce-clusters", type=Path)
     parser.add_argument("--canonical-test-manifest", type=Path)
     parser.add_argument("--test-token-manifest", type=Path)
@@ -49,7 +50,7 @@ def main() -> None:
     if args.mode in {"train", "all"}:
         if args.train_manifest is None or args.gce_clusters is None:
             parser.error("--mode train requires --train-manifest and --gce-clusters")
-        previous["training"] = audit_training_manifest(args.train_manifest)
+        previous["training"] = audit_training_manifest(args.train_manifest, mixed_metadata=args.mixed_metadata)
         inspect = Path(__file__).with_name("gce") / "inspect_clusters.py"
         result = subprocess.run(
             [sys.executable, str(inspect), "--model", str(args.model), "--clusters", str(args.gce_clusters), "--levels", "1024", "512"],

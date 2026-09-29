@@ -25,13 +25,13 @@ def eval_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
     data = tmp_path / "data"
     data.mkdir()
     manifest = data / "mixed.jsonl"
-    manifest.write_text("".join('{"id": %d}\n' % index for index in range(1600)), encoding="utf-8")
+    manifest.write_text("".join('{"id": %d}\n' % index for index in range(3200)), encoding="utf-8")
     gce = tmp_path / "gce.pt"
     gce.write_bytes(b"clusters")
     output = tmp_path / "training"
     output.mkdir()
     for name in TRAIN_OUTPUTS:
-        checkpoint = output / name / "checkpoint-000500"
+        checkpoint = output / name / "checkpoint-000400"
         checkpoint.mkdir(parents=True)
         (checkpoint / "_SUCCESS").write_text("ok\n", encoding="utf-8")
     eval_output = tmp_path / "evaluation"

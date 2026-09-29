@@ -15,7 +15,8 @@ REPOSITORY = Path(__file__).resolve().parents[2]
 def environment(monkeypatch, tmp_path):
     manifest = tmp_path / "mixed" / "manifest.jsonl"
     manifest.parent.mkdir()
-    manifest.write_text('{"dataset_name":"magicbrush"}\n' * 16611, encoding="utf-8")
+    names = ("magicbrush", "refedit", "crispedit", "scaleedit")
+    manifest.write_text("".join('{"dataset_name":"%s"}\n' % names[index % 4] for index in range(4099)), encoding="utf-8")
     for key, value in {
         "MODEL_PATH": tmp_path / "model",
         "DATA_ROOT": tmp_path,
@@ -87,4 +88,4 @@ def test_editregion_validation_configs_are_four_gpu_correctness_runs(name, envir
     assert args.target_corruption_mode == "edit_region_hardlock"
     assert (args.nproc_per_node, args.batch_size, args.gradient_accumulation, args.global_batch_size) == (4, 4, 2, 32)
     assert args.max_steps == args.save_steps == 20
-    assert args.scheduler_horizon_steps == 5190
+    assert args.scheduler_horizon_steps == 4 * args.optimizer_steps_per_epoch

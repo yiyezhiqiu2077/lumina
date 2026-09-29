@@ -126,10 +126,13 @@ if [[ "$mode" == '--run' ]]; then
     [[ ! -e "$OUTPUT_ROOT/2x3_formal_pipeline.log" ]] || \
         die "existing formal output detected: $OUTPUT_ROOT/2x3_formal_pipeline.log"
 
-    # This gates the immutable 8807/7804 training composition, all token files,
-    # Lumina/VQ identity, and GCE cluster compatibility before group 1 starts.
+    # This gates the fixed 8807/7804 plus dynamic strict-label composition, all token files,
+    # dynamic CrispEdit/ScaleEdit strict counts, Lumina/VQ identity, and GCE
+    # cluster compatibility before group 1 starts.
     run_asset_audit --mode train --output "$formal_asset_path" \
-        --model "$MODEL_PATH" --train-manifest "$DATA_CONFIG" --gce-clusters "$GCE_CLUSTER_PATH"
+        --model "$MODEL_PATH" --train-manifest "$DATA_CONFIG" \
+        --mixed-metadata "${MIXED_METADATA_PATH:-$DATA_ROOT/dataset_meta.json}" \
+        --gce-clusters "$GCE_CLUSTER_PATH"
 fi
 
 # Verify every underlying single-run launch before any formal run can start.

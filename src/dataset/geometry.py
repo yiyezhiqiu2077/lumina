@@ -45,20 +45,23 @@ def generate_crop_size_list(num_patches: int, patch_size: int, max_ratio: float 
 
 
 def sample_shared_geometry(size: tuple[int, int], seed: int, target_size: int = 512) -> SharedGeometry:
+    """Sample one aligned square crop whose VQ grid is always 32×32 at 512px.
+
+    Formal Mixed editing has a fixed 32×32 token contract.  The previous
+    aspect-ratio bucket selection could emit rectangular crops (for example
+    416×608), which made the later VQ/audit contract impossible to satisfy.
+    """
     width, height = size
-    candidates = generate_crop_size_list((target_size // 32) ** 2, 32)
-    crop_width, crop_height = max(
-        candidates,
-        key=lambda candidate: min(candidate[0] / width, candidate[1] / height)
-        / max(candidate[0] / width, candidate[1] / height),
-    )
+    if width <= 0 or height <= 0 or target_size <= 0:
+        raise ValueError("image dimensions and target_size must be positive")
+    crop_width = crop_height = target_size
     down_width, down_height = width, height
     while down_width >= 2 * crop_width and down_height >= 2 * crop_height:
         down_width //= 2
         down_height //= 2
     scale = max(crop_width / down_width, crop_height / down_height)
-    resized_width = round(down_width * scale)
-    resized_height = round(down_height * scale)
+    resized_width = max(crop_width, math.ceil(down_width * scale))
+    resized_height = max(crop_height, math.ceil(down_height * scale))
     rng = random.Random(seed)
     crop_left = rng.randint(0, resized_width - crop_width)
     crop_top = rng.randint(0, resized_height - crop_height)
