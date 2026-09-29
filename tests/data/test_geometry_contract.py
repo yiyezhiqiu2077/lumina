@@ -13,6 +13,7 @@ def test_lumina_buckets_choose_square_landscape_and_portrait_deterministically()
     assert (landscape.crop_width, landscape.crop_height) == (608, 416)
     assert (portrait.crop_width, portrait.crop_height) == (416, 608)
     assert sample_shared_geometry((1536, 1024), 42) == landscape
+    assert sample_shared_geometry((1536, 1024), 0).crop_left != sample_shared_geometry((1536, 1024), 1).crop_left
     assert (landscape.crop_width, landscape.crop_height) in valid_crop_sizes()
     assert expected_token_grid(landscape) == (26, 38)
     assert expected_token_grid(portrait) == (38, 26)
