@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from dataset.utils import read_jsonl
+from dataset.geometry import geometry_policy
+from dataset.token_contract import validate_token_payload
 
 
 FORMAL_TRAIN_COUNTS = {"magicbrush": 8807, "refedit": 7804}
@@ -81,16 +83,29 @@ def _mixed4_expected_counts(metadata_path: Path, manifest: Path) -> tuple[dict[s
     expected = {name: int(declared[name]) for name in FORMAL_TRAIN_DATASETS}
     if any(expected[name] <= 0 for name in ("crispedit", "scaleedit")):
         raise ValueError("CrispEdit and ScaleEdit strict usable counts must be positive")
-    for name in ("crispedit", "scaleedit"):
+    for name in FORMAL_TRAIN_DATASETS:
         item = component[name]
         token_meta = Path(item["tokenization_metadata"])
         if not token_meta.is_file() or item.get("tokenization_metadata_sha256") != sha256(token_meta):
             raise ValueError(f"{name} tokenization metadata identity mismatch")
         token_payload = json.loads(token_meta.read_text(encoding="utf-8"))
-        if int(token_payload.get("usable_row_count", -1)) != expected[name]:
+        tokenization = token_payload.get("tokenization", token_payload)
+        if int(tokenization.get("usable_row_count", -1)) != expected[name]:
             raise ValueError(f"{name} count does not match tokenization metadata")
+        if tokenization.get("geometry_policy") != geometry_policy():
+            raise ValueError(f"{name} geometry policy identity mismatch")
+        if not tokenization.get("observed_token_grids"):
+            raise ValueError(f"{name} tokenization metadata has no observed token grids")
+        if metadata.get("observed_token_grids", {}).get(name) != tokenization.get("observed_token_grids"):
+            raise ValueError(f"{name} mixed/tokenization observed-grid metadata mismatch")
+        if name in {"crispedit", "scaleedit"} and (not token_payload.get("repo_id") or not token_payload.get("revision")):
+            raise ValueError(f"{name} pinned dataset provenance is missing")
     if metadata.get("duplicate_sample_key_count") != 0:
         raise ValueError("Mixed-4 metadata reports duplicate sample keys")
+    if metadata.get("geometry_policy") != geometry_policy():
+        raise ValueError("Mixed-4 metadata geometry policy identity mismatch")
+    if set(metadata.get("observed_token_grids", {})) != set(FORMAL_TRAIN_DATASETS):
+        raise ValueError("Mixed-4 metadata must report observed token grids for every dataset")
     if metadata.get("manifest") and Path(metadata["manifest"]).resolve() != manifest:
         raise ValueError("Mixed-4 metadata manifest path does not match audited manifest")
     return expected, {"path": str(metadata_path), "sha256": sha256(metadata_path), "dataset_counts": expected}
@@ -125,11 +140,8 @@ def audit_training_manifest(
                 continue
             try:
                 payload = torch.load(token, map_location="cpu", weights_only=True)
-                valid = (tuple(payload.get("source_codes").shape) == (32, 32)
-                         and tuple(payload.get("target_codes").shape) == (32, 32)
-                         and tuple(payload.get("edit_mask").shape) == (32, 32)
-                         and bool(payload["edit_mask"].any())
-                         and payload.get("token_height") == 32 and payload.get("token_width") == 32)
+                validate_token_payload(payload, sample_key=str(row.get("sample_key", "")), dataset_name=str(row.get("dataset_name", "")), require_processed_geometry=True)
+                valid = True
             except Exception:
                 valid = False
             if not valid:
@@ -194,9 +206,9 @@ def audit_test_assets(canonical_manifest: Path, token_manifest: Path, subset: Pa
             continue
         import torch
         payload = torch.load(token, map_location="cpu", weights_only=True)
-        if (tuple(getattr(payload.get("source_codes"), "shape", ())) != (32, 32) or tuple(getattr(payload.get("target_codes"), "shape", ())) != (32, 32)
-                or tuple(getattr(payload.get("edit_mask"), "shape", ())) != (32, 32) or not bool(payload.get("edit_mask", torch.zeros(())).any())
-                or payload.get("token_height") != 32 or payload.get("token_width") != 32):
+        try:
+            validate_token_payload(payload, sample_key=str(row.get("sample_key", "")), require_processed_geometry=True)
+        except ValueError:
             invalid_payloads.append(str(token))
             if len(invalid_payloads) >= 3:
                 break

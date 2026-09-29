@@ -17,7 +17,7 @@ def _args(tmp_path: Path) -> Namespace:
     model = tmp_path / "model"
     _write(model / "config.json", "{}\n")
     config = _write(tmp_path / "train.yaml", "objective: ce\n")
-    dataset = _write(tmp_path / "dataset.yaml", "vq_grid: [32, 32]\n")
+    dataset = _write(tmp_path / "dataset.yaml", "image_geometry:\n  policy: lumina_aspect_ratio\n")
     distributed = _write(tmp_path / "distributed.yaml", "launcher: torchrun\n")
     manifest = _write(tmp_path / "manifest.jsonl", "{}\n")
     return Namespace(

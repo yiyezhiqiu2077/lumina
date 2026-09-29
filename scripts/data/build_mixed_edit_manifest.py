@@ -11,6 +11,8 @@ from pathlib import Path
 import torch
 
 from dataset.formal_assets import sha256
+from dataset.geometry import geometry_policy
+from dataset.token_contract import grid_key, validate_token_payload
 from dataset.utils import read_jsonl, write_jsonl
 
 
@@ -30,32 +32,27 @@ def _link(destination: Path, target: Path) -> None:
     destination.symlink_to(target.resolve(), target_is_directory=True)
 
 
-def _payload_reason(path: Path) -> str | None:
+def _payload_reason(path: Path) -> tuple[str | None, tuple[int, int] | None]:
     if not path.is_file():
-        return "missing_token_file"
+        return "missing_token_file", None
     try:
         payload = torch.load(path, map_location="cpu", weights_only=True)
     except Exception:
-        return "unreadable_token_payload"
-    required = {"source_codes", "target_codes", "edit_mask", "token_height", "token_width"}
-    if required.difference(payload):
-        return "invalid_token_payload_keys"
-    if tuple(payload["source_codes"].shape) != (32, 32) or tuple(payload["target_codes"].shape) != (32, 32):
-        return "invalid_token_grid"
-    if tuple(payload["edit_mask"].shape) != (32, 32):
-        return "invalid_mask_grid"
-    if not bool(payload["edit_mask"].any()):
-        return "empty_mask"
-    return None
+        return "unreadable_token_payload", None
+    try:
+        return None, validate_token_payload(payload, require_processed_geometry=True)
+    except ValueError as error:
+        return f"invalid_token_payload:{error}", None
 
 
-def _rows(manifest: Path, dataset_name: str) -> tuple[list[dict], Counter[str]]:
+def _rows(manifest: Path, dataset_name: str) -> tuple[list[dict], Counter[str], Counter[str]]:
     rows, failures = [], Counter()
+    grids = Counter()
     manifest = manifest.resolve()
     for row in read_jsonl(manifest):
         token_path = Path(row["token_file"])
         token_path = token_path if token_path.is_absolute() else manifest.parent / token_path
-        reason = _payload_reason(token_path)
+        reason, shape = _payload_reason(token_path)
         if reason is not None:
             failures[reason] += 1
             continue
@@ -70,7 +67,8 @@ def _rows(manifest: Path, dataset_name: str) -> tuple[list[dict], Counter[str]]:
                 "token_file": (Path("files") / dataset_name / token_path.name).as_posix(),
             }
         )
-    return rows, failures
+        grids[grid_key(*shape)] += 1
+    return rows, failures, grids
 
 
 def main() -> None:
@@ -93,11 +91,13 @@ def main() -> None:
     links.mkdir(parents=True, exist_ok=True)
     all_rows: list[dict] = []
     failures: dict[str, dict[str, int]] = {}
+    observed_token_grids: dict[str, dict[str, int]] = {}
     component_manifests: dict[str, dict] = {}
     for dataset_name, manifest_path in components:
-        rows, rejected = _rows(manifest_path, dataset_name)
+        rows, rejected, grids = _rows(manifest_path, dataset_name)
         all_rows.extend(rows)
         failures[dataset_name] = dict(sorted(rejected.items()))
+        observed_token_grids[dataset_name] = dict(sorted(grids.items()))
         component_manifests[dataset_name] = {
             "path": str(manifest_path), "sha256": sha256(manifest_path),
             "usable_row_count": len(rows),
@@ -118,7 +118,8 @@ def main() -> None:
         "total_count": len(all_rows),
         "duplicate_sample_key_count": duplicates,
         "invalid_token_payload_counts": failures,
-        "token_grid": [32, 32],
+        "geometry_policy": geometry_policy(),
+        "observed_token_grids": observed_token_grids,
         "manifest": str(manifest),
     }
     (output / "dataset_meta.json").write_text(json.dumps(audit, indent=2) + "\n", encoding="utf-8")

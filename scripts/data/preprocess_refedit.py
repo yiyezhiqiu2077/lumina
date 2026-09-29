@@ -18,9 +18,10 @@ import numpy as np
 from diffusers import VQModel
 from diffusers.image_processor import VaeImageProcessor
 
-from dataset.geometry import apply_shared_geometry, sample_shared_geometry
+from dataset.geometry import apply_shared_geometry, geometry_policy, mask_retention, sample_shared_geometry, summarize_mask_retentions, vq_stride_from_vqvae
 from dataset.preprocess import encode, token_mask
 from dataset.refedit import audit_refedit, iter_refedit_records
+from dataset.token_contract import atomic_save_token, grid_key, validate_token_payload
 from dataset.utils import write_jsonl
 from dataset.magicbrush import stable_sample_seed
 
@@ -79,12 +80,14 @@ def tokenize(args: argparse.Namespace) -> Path:
         torch_dtype=torch.float16,
         local_files_only=True,
     ).to(device).eval()
-    scale = 2 ** (len(vqvae.config.block_out_channels) - 1)
-    processor = VaeImageProcessor(vae_scale_factor=scale, do_normalize=False)
+    vq_stride = vq_stride_from_vqvae(vqvae)
+    processor = VaeImageProcessor(vae_scale_factor=vq_stride, do_normalize=False)
     files = args.output / "files"
     files.mkdir(exist_ok=True)
     rows = []
     token_mask_areas = []
+    retentions = []
+    observed_grids = Counter()
     with torch.no_grad():
         for index, record in enumerate(
             iter_refedit_records(
@@ -96,6 +99,10 @@ def tokenize(args: argparse.Namespace) -> Path:
                 break
             geometry_seed = stable_sample_seed(args.seed, 0, record["sample_key"])
             geometry = sample_shared_geometry(record["source"].size, geometry_seed, args.target_size)
+            retention = mask_retention(record["mask"], geometry)
+            if retention["post_geometry_empty_mask"]:
+                strict_skipped["post_geometry_empty_mask"] += 1
+                continue
             source = apply_shared_geometry(record["source"], geometry)
             target = apply_shared_geometry(record["target"], geometry)
             mask = apply_shared_geometry(record["mask"], geometry, is_mask=True)
@@ -104,23 +111,21 @@ def tokenize(args: argparse.Namespace) -> Path:
             if source_shape != target_shape:
                 raise ValueError(f"VQ source/target mismatch for {record['sample_key']}")
             edit_mask = token_mask(mask, source_shape, device)
-            if source_shape != (32, 32) or edit_mask.shape != source_codes.shape:
+            if edit_mask.shape != source_codes.shape:
                 raise ValueError(f"unexpected VQ contract for {record['sample_key']}: {source_shape}")
             if not bool(edit_mask.any()):
-                raise ValueError(f"empty token mask after geometry for {record['sample_key']}")
+                strict_skipped["post_geometry_empty_mask"] += 1
+                continue
             token_file = files / f"{index:06d}.pt"
-            torch.save(
-                {
-                    "source_codes": source_codes,
-                    "target_codes": target_codes,
-                    "edit_mask": edit_mask,
-                    "token_height": source_shape[0],
-                    "token_width": source_shape[1],
-                    "processed_width": source.width,
-                    "processed_height": source.height,
-                },
-                token_file,
-            )
+            payload = {
+                "dataset_name": "refedit", "sample_key": record["sample_key"], "geometry_seed": geometry_seed,
+                "geometry": geometry.as_dict(), "vq_stride": vq_stride,
+                "source_codes": source_codes, "target_codes": target_codes, "edit_mask": edit_mask,
+                "token_height": source_shape[0], "token_width": source_shape[1],
+                "processed_width": source.width, "processed_height": source.height,
+            }
+            validate_token_payload(payload, sample_key=record["sample_key"], dataset_name="refedit", require_processed_geometry=True)
+            atomic_save_token(payload, token_file, sample_key=record["sample_key"], dataset_name="refedit")
             rows.append(
                 {
                     "dataset_name": "refedit",
@@ -131,18 +136,25 @@ def tokenize(args: argparse.Namespace) -> Path:
                     "token_width": source_shape[1],
                     "geometry": geometry.as_dict(),
                     "geometry_seed": geometry_seed,
+                    "mask_retention": retention,
                     "row_idx": record["row_idx"],
                     "source_relative_path": record["source_relative_path"],
                 }
             )
             token_mask_areas.append(float(edit_mask.float().mean()))
+            retentions.append(float(retention["mask_retention_ratio"]))
+            observed_grids[grid_key(*source_shape)] += 1
             if (index + 1) % 10 == 0:
                 print(json.dumps({"complete": index + 1}), flush=True)
     write_jsonl(args.output / "manifest.jsonl", rows)
     meta["tokenization"] = {
         "usable_row_count": len(rows),
         "strict_skipped_reasons": dict(sorted(strict_skipped.items())),
-        "token_grid": [32, 32],
+        "geometry_policy": geometry_policy(target_size=args.target_size),
+        "vq_stride": vq_stride,
+        "observed_token_grids": dict(sorted(observed_grids.items())),
+        "post_geometry_rejected_count": int(strict_skipped.get("post_geometry_empty_mask", 0)),
+        "mask_retention": summarize_mask_retentions(retentions),
         "token_mask_area_fraction": {
             "mean": sum(token_mask_areas) / len(token_mask_areas) if token_mask_areas else 0.0,
             "min": min(token_mask_areas) if token_mask_areas else 0.0,

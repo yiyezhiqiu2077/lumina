@@ -10,6 +10,7 @@ from torch.utils.data import Dataset
 
 from utils.constants import SPECIAL_TOKENS
 from dataset.utils import read_jsonl
+from dataset.token_contract import validate_token_payload
 from utils.prompt_utils import create_prompt_templates
 
 
@@ -215,6 +216,7 @@ class EditTokenDataset(Dataset):
                 "empty edit mask is invalid for edit_region_hardlock: "
                 f"dataset_name={row.get('dataset_name', 'magicbrush')} sample_key={row['sample_key']}"
             )
+        validate_token_payload(payload, sample_key=str(row["sample_key"]), dataset_name=row.get("dataset_name"))
         rng = self._rng(str(row["sample_key"]))
         conditional = rng.random() >= self.condition_dropout
         instruction = row["instruction"] if conditional else "<uncondition>"

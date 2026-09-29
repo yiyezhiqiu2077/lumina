@@ -1,6 +1,7 @@
 # Lumina-DiMOO Mixed Editing Experiments
 
-本仓库用于在 Lumina-DiMOO 上进行图像编辑实验，当前统一支持 MagicBrush + RefEdit、
+本仓库用于在 Lumina-DiMOO 上进行图像编辑实验，当前统一支持 MagicBrush、RefEdit、
+CrispEdit、ScaleEdit，
 CE / Attention / GCE 三种训练目标，以及 `full_target` / `edit_region_hardlock` 两种 target
 corruption。提供数据处理、LoRA 微调、DDP、checkpoint 和 GT-mask 评测流程。
 
@@ -49,6 +50,8 @@ local_assets/
 │   ├── magicbrush/
 │   ├── magicbrush-test/
 │   ├── refedit/
+│   ├── crispedit/
+│   ├── scaleedit/
 │   └── mixed/
 └── experiments/
 ```
@@ -58,13 +61,16 @@ bash scripts/setup_local_assets.sh model /path/to/Lumina-DiMOO
 bash scripts/setup_local_assets.sh magicbrush /path/to/magicbrush-token-root
 bash scripts/setup_local_assets.sh magicbrush-test /path/to/MagicBrush-test
 bash scripts/setup_local_assets.sh refedit /path/to/refedit-root
+bash scripts/setup_local_assets.sh crispedit /path/to/crispedit-root
+bash scripts/setup_local_assets.sh scaleedit /path/to/scaleedit-root
 bash scripts/setup_local_assets.sh mixed /path/to/mixed-token-root
 bash scripts/setup_local_assets.sh dino /path/to/dinov2-base
 bash scripts/setup_local_assets.sh clip /path/to/clip-vit-large-patch14
 ```
 
-数据流程为 MagicBrush + RefEdit → shared preprocessing → VQ pre-tokenization → mixed manifest →
-training。详细准备步骤见 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)。
+数据流程为 Mixed-4 → Lumina aspect-ratio-aware shared preprocessing → variable H×W VQ
+pre-tokenization → mixed manifest → training。`target_size=512` 是 bucket policy，不表示强制
+512×512。详细准备步骤见 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)。
 
 ## 正式实验
 

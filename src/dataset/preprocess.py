@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import random
+from collections import Counter
 from pathlib import Path
 
 import torch
@@ -17,9 +18,14 @@ from dataset.geometry import (
     SharedGeometry,
     apply_shared_geometry,
     enrich_geometry,
+    geometry_policy,
+    mask_retention,
     resolve_record_paths,
     split_by_session,
+    summarize_mask_retentions,
+    vq_stride_from_vqvae,
 )
+from dataset.token_contract import atomic_save_token, grid_key, validate_token_payload
 from dataset.utils import read_jsonl, write_jsonl
 
 
@@ -57,9 +63,12 @@ def pretokenize_magicbrush(manifest: Path, model: Path, output: Path) -> Path:
         torch_dtype=torch.float16,
         local_files_only=True,
     ).to(device).eval()
-    scale = 2 ** (len(vqvae.config.block_out_channels) - 1)
-    processor = VaeImageProcessor(vae_scale_factor=scale, do_normalize=False)
+    vq_stride = vq_stride_from_vqvae(vqvae)
+    processor = VaeImageProcessor(vae_scale_factor=vq_stride, do_normalize=False)
     output_rows = []
+    skipped = Counter()
+    grids = Counter()
+    retentions = []
     with torch.no_grad():
         for position in range(rank, len(rows), world_size):
             row = rows[position]
@@ -73,26 +82,30 @@ def pretokenize_magicbrush(manifest: Path, model: Path, output: Path) -> Path:
             if source_shape != target_shape:
                 raise ValueError(f"VQ shape mismatch for {row['sample_key']}: {source_shape} vs {target_shape}")
             edit_mask = token_mask(mask, source_shape, device)
-            if edit_mask.numel() != source_codes.numel():
-                raise AssertionError("mask and VQ token counts differ")
-            torch.save(
-                {
-                    "source_codes": source_codes,
-                    "target_codes": target_codes,
-                    "edit_mask": edit_mask,
-                    "token_height": source_shape[0],
-                    "token_width": source_shape[1],
-                    "processed_width": source.width,
-                    "processed_height": source.height,
-                },
-                destination,
-            )
+            if source_shape != target_shape:
+                raise ValueError(f"VQ source/target mismatch for {row['sample_key']}")
+            retention = row.get("mask_retention") or mask_retention(Image.open(row["mask_edit"]).convert("L"), geometry)
+            if retention["post_geometry_empty_mask"] or not bool(edit_mask.any()):
+                skipped["post_geometry_empty_mask"] += 1
+                continue
+            payload = {
+                "dataset_name": row.get("dataset_name", "magicbrush"), "sample_key": row["sample_key"],
+                "geometry_seed": row.get("geometry_seed"), "geometry": geometry.as_dict(), "vq_stride": vq_stride,
+                "source_codes": source_codes, "target_codes": target_codes, "edit_mask": edit_mask,
+                "token_height": source_shape[0], "token_width": source_shape[1],
+                "processed_width": source.width, "processed_height": source.height,
+            }
+            validate_token_payload(payload, sample_key=row["sample_key"], dataset_name=row.get("dataset_name", "magicbrush"), require_processed_geometry=True)
+            atomic_save_token(payload, destination, sample_key=row["sample_key"], dataset_name=row.get("dataset_name", "magicbrush"))
+            grids[grid_key(*source_shape)] += 1
+            retentions.append(float(retention["mask_retention_ratio"]))
             output_rows.append(
                 {
                     **row,
                     "token_file": str(destination),
                     "token_height": source_shape[0],
                     "token_width": source_shape[1],
+                    "mask_retention": retention,
                 }
             )
             if len(output_rows) % 10 == 0:
@@ -101,16 +114,31 @@ def pretokenize_magicbrush(manifest: Path, model: Path, output: Path) -> Path:
     with shard.open("w", encoding="utf-8") as handle:
         for row in output_rows:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+    (output / f"summary.rank{rank:02d}.json").write_text(json.dumps({
+        "skipped": dict(skipped), "grids": dict(grids), "retentions": retentions,
+    }), encoding="utf-8")
     if world_size > 1:
         dist.barrier()
     if rank == 0:
         combined = []
+        all_skipped, all_grids, all_retentions = Counter(), Counter(), []
         for shard_rank in range(world_size):
             combined.extend(read_jsonl(output / f"manifest.rank{shard_rank:02d}.jsonl"))
+            summary = json.loads((output / f"summary.rank{shard_rank:02d}.json").read_text(encoding="utf-8"))
+            all_skipped.update(summary["skipped"])
+            all_grids.update(summary["grids"])
+            all_retentions.extend(summary["retentions"])
         combined.sort(key=lambda row: int(Path(row["token_file"]).stem))
         with (output / "manifest.jsonl").open("w", encoding="utf-8") as handle:
             for row in combined:
                 handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        (output / "dataset_meta.json").write_text(json.dumps({
+            "dataset_name": "magicbrush", "usable_row_count": len(combined), "tokenized_usable_count": len(combined),
+            "geometry_policy": geometry_policy(), "vq_stride": vq_stride,
+            "post_geometry_rejected_count": int(all_skipped.get("post_geometry_empty_mask", 0)),
+            "observed_token_grids": dict(sorted(all_grids.items())),
+            "mask_retention": summarize_mask_retentions(all_retentions),
+        }, indent=2) + "\n", encoding="utf-8")
         print(json.dumps({"samples": len(combined), "output": str(output / "manifest.jsonl")}, indent=2))
     if world_size > 1:
         dist.destroy_process_group()

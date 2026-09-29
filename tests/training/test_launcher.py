@@ -60,7 +60,7 @@ def test_global_batch_validation_rejects_mismatch():
         batch_size=8,
         gradient_accumulation=4,
         global_batch_size=63,
-        vq_grid=[32, 32],
+        image_geometry={"policy": "lumina_aspect_ratio", "target_size": 512, "bucket_patch_size": 32, "max_ratio": 4.0},
         launcher="torchrun",
         rdzv="standalone",
     )

@@ -1,4 +1,8 @@
 name: MagicBrush+RefEdit+CrispEdit+ScaleEdit
 token_manifest_default: mixed/train/manifest.jsonl
-vq_grid: [32, 32]
+image_geometry:
+  policy: lumina_aspect_ratio
+  target_size: 512
+  bucket_patch_size: 32
+  max_ratio: 4.0
 corruption_seed: blake2b("{global_seed}\\0{epoch}\\0{sample_key}")

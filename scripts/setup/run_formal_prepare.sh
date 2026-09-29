@@ -41,9 +41,11 @@ PY
 }
 
 python_cmd=(uv run python)
+# Both train and evaluation need Lumina/VQ preprocessing. Keep these shared
+# dependencies outside the scope branches so an empty eval-only machine works.
+run_stage environment uv sync --frozen --extra dev --extra upstream --extra analysis --extra eval --extra data
+run_stage download_models "${python_cmd[@]}" "$root/scripts/setup/download_formal_models.py" --assets-root "$assets_root" --config "$config" --only lumina
 if [[ "$scope" != eval ]]; then
-  run_stage environment uv sync --frozen --extra dev --extra upstream --extra analysis --extra eval --extra data
-  run_stage download_models "${python_cmd[@]}" "$root/scripts/setup/download_formal_models.py" --assets-root "$assets_root" --config "$config" --only lumina
   run_stage magicbrush_train_download "${python_cmd[@]}" "$root/scripts/data/download_magicbrush_train.py" --assets-root "$assets_root" --config "$config"
   run_stage magicbrush_geometry "${python_cmd[@]}" "$root/scripts/data/download_magicbrush_train.py" --assets-root "$assets_root" --config "$config" --geometry-only
   run_stage magicbrush_tokenize uv run python -m torch.distributed.run --standalone --nproc_per_node="${TOKENIZE_GPUS:-8}" "$root/scripts/data/preprocess_magicbrush.py" pretokenize --manifest "$assets_root/datasets/magicbrush/prepared/train.jsonl" --model "$assets_root/models/Lumina-DiMOO" --output "$assets_root/datasets/magicbrush/tokens/train"
@@ -58,10 +60,10 @@ if [[ "$scope" != eval ]]; then
   run_stage scaleedit_tokenize uv run python -m torch.distributed.run --standalone --nproc_per_node="${TOKENIZE_GPUS:-8}" "$root/scripts/data/preprocess_scaleedit.py" tokenize --raw-root "$assets_root/datasets/scaleedit/raw" --model "$assets_root/models/Lumina-DiMOO" --output "$assets_root/datasets/scaleedit/tokens/train" --seed 42 --target-size 512
   run_stage mixed_manifest "${python_cmd[@]}" "$root/scripts/data/build_mixed_edit_manifest.py" --input magicbrush="$assets_root/datasets/magicbrush/tokens/train/manifest.jsonl" --input refedit="$assets_root/datasets/refedit/tokens/train/manifest.jsonl" --input crispedit="$assets_root/datasets/crispedit/tokens/train/manifest.jsonl" --input scaleedit="$assets_root/datasets/scaleedit/tokens/train/manifest.jsonl" --output "$assets_root/datasets/mixed"
   run_stage gce_clusters "${python_cmd[@]}" "$root/scripts/tools/gce/build_clusters.py" --model "$assets_root/models/Lumina-DiMOO" --output "$assets_root/artifacts/gce_clusters_1024_512.pt" --levels 1024 512 --seed 0
-  run_stage metric_models "${python_cmd[@]}" "$root/scripts/setup/download_formal_models.py" --assets-root "$assets_root" --config "$config" --only dino --only clip
-  run_stage lpips "${python_cmd[@]}" "$root/scripts/setup/prefetch_lpips.py" --assets-root "$assets_root"
 fi
 if [[ "$scope" != train ]]; then
+  run_stage metric_models "${python_cmd[@]}" "$root/scripts/setup/download_formal_models.py" --assets-root "$assets_root" --config "$config" --only dino --only clip
+  run_stage lpips "${python_cmd[@]}" "$root/scripts/setup/prefetch_lpips.py" --assets-root "$assets_root"
   if [[ -n "${MAGICBRUSH_TEST_ARCHIVE:-}" ]]; then
     run_stage magicbrush_test_download "${python_cmd[@]}" "$root/scripts/data/download_magicbrush_test.py" --archive "$MAGICBRUSH_TEST_ARCHIVE" --output "$assets_root/datasets/magicbrush-test/raw"
   else
@@ -72,5 +74,12 @@ if [[ "$scope" != train ]]; then
   run_stage test_geometry "${python_cmd[@]}" "$root/scripts/eval/prepare_magicbrush_eval.py" --manifest "$assets_root/datasets/magicbrush-test/canonical/manifest.jsonl" --output "$assets_root/datasets/magicbrush-test/geometry.jsonl" --seed 42 --target-size 512
   run_stage test_tokenize uv run python -m torch.distributed.run --standalone --nproc_per_node="${TOKENIZE_GPUS:-8}" "$root/scripts/data/preprocess_magicbrush.py" pretokenize --manifest "$assets_root/datasets/magicbrush-test/geometry.jsonl" --model "$assets_root/models/Lumina-DiMOO" --output "$assets_root/datasets/magicbrush-test/tokens"
   run_stage test_subset "${python_cmd[@]}" "$root/scripts/eval/evaluate_gt_mask_editing.py" --manifest "$assets_root/datasets/magicbrush-test/tokens/manifest.jsonl" --subset "$assets_root/datasets/magicbrush-test/eval_subset.jsonl" --prepare-subset-only --limit 0 --seed 42
+fi
+
+if [[ "$scope" == train ]]; then
+  run_stage formal_asset_audit "${python_cmd[@]}" "$root/scripts/tools/audit_formal_assets.py" --mode train --output "$assets_root/artifacts/formal_assets.json" --asset-config "$config" --model "$assets_root/models/Lumina-DiMOO" --train-manifest "$assets_root/datasets/mixed/train/manifest.jsonl" --mixed-metadata "$assets_root/datasets/mixed/dataset_meta.json" --gce-clusters "$assets_root/artifacts/gce_clusters_1024_512.pt"
+elif [[ "$scope" == eval ]]; then
+  run_stage formal_asset_audit "${python_cmd[@]}" "$root/scripts/tools/audit_formal_assets.py" --mode eval --output "$assets_root/artifacts/formal_assets.json" --asset-config "$config" --model "$assets_root/models/Lumina-DiMOO" --canonical-test-manifest "$assets_root/datasets/magicbrush-test/canonical/manifest.jsonl" --test-token-manifest "$assets_root/datasets/magicbrush-test/tokens/manifest.jsonl" --test-subset "$assets_root/datasets/magicbrush-test/eval_subset.jsonl" --dino-model "$assets_root/models/dinov2-base" --clip-model "$assets_root/models/clip-vit-large-patch14"
+else
   run_stage formal_asset_audit "${python_cmd[@]}" "$root/scripts/tools/audit_formal_assets.py" --mode all --output "$assets_root/artifacts/formal_assets.json" --asset-config "$config" --model "$assets_root/models/Lumina-DiMOO" --train-manifest "$assets_root/datasets/mixed/train/manifest.jsonl" --mixed-metadata "$assets_root/datasets/mixed/dataset_meta.json" --gce-clusters "$assets_root/artifacts/gce_clusters_1024_512.pt" --canonical-test-manifest "$assets_root/datasets/magicbrush-test/canonical/manifest.jsonl" --test-token-manifest "$assets_root/datasets/magicbrush-test/tokens/manifest.jsonl" --test-subset "$assets_root/datasets/magicbrush-test/eval_subset.jsonl" --dino-model "$assets_root/models/dinov2-base" --clip-model "$assets_root/models/clip-vit-large-patch14"
 fi

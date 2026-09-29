@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 import torch
 
+from dataset.geometry import geometry_policy
 from evaluation.formal_assets import audit_test_assets, audit_training_manifest, metric_model_identity
 
 
@@ -45,16 +46,16 @@ def test_mixed4_composition_uses_dynamic_new_dataset_counts_and_token_metadata(t
     for name, count in {"magicbrush": 8807, "refedit": 7804, "crispedit": 2, "scaleedit": 3}.items():
         token = tmp_path / name / "files" / "token.pt"
         token.parent.mkdir(parents=True)
-        torch.save({"source_codes": torch.zeros(32, 32, dtype=torch.int32), "target_codes": torch.zeros(32, 32, dtype=torch.int32), "edit_mask": torch.ones(32, 32, dtype=torch.bool), "token_height": 32, "token_width": 32}, token)
+        torch.save({"source_codes": torch.zeros(26, 38, dtype=torch.int32), "target_codes": torch.zeros(26, 38, dtype=torch.int32), "edit_mask": torch.ones(26, 38, dtype=torch.bool), "token_height": 26, "token_width": 38, "processed_width": 608, "processed_height": 416, "vq_stride": 16}, token)
         component_meta = tmp_path / name / "dataset_meta.json"
-        component_meta.write_text(json.dumps({"usable_row_count": count}), encoding="utf-8")
+        component_meta.write_text(json.dumps({"usable_row_count": count, "geometry_policy": geometry_policy(), "observed_token_grids": {"26x38": count}, "repo_id": "pinned" if name in {"crispedit", "scaleedit"} else None, "revision": "revision" if name in {"crispedit", "scaleedit"} else None}), encoding="utf-8")
         component[name] = {"tokenization_metadata": str(component_meta), "tokenization_metadata_sha256": __import__("hashlib").sha256(component_meta.read_bytes()).hexdigest()}
         rows.extend({"dataset_name": name, "sample_key": f"{name}/{index}", "token_file": str(token)} for index in range(count))
     manifest = tmp_path / "mixed" / "train" / "manifest.jsonl"
     manifest.parent.mkdir(parents=True)
     manifest.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
     metadata = tmp_path / "mixed" / "dataset_meta.json"
-    metadata.write_text(json.dumps({"dataset_counts": {"magicbrush": 8807, "refedit": 7804, "crispedit": 2, "scaleedit": 3}, "component_manifests": component, "duplicate_sample_key_count": 0, "manifest": str(manifest)}), encoding="utf-8")
+    metadata.write_text(json.dumps({"dataset_counts": {"magicbrush": 8807, "refedit": 7804, "crispedit": 2, "scaleedit": 3}, "component_manifests": component, "duplicate_sample_key_count": 0, "geometry_policy": geometry_policy(), "observed_token_grids": {name: {"26x38": count} for name, count in {"magicbrush": 8807, "refedit": 7804, "crispedit": 2, "scaleedit": 3}.items()}, "manifest": str(manifest)}), encoding="utf-8")
     result = audit_training_manifest(manifest, mixed_metadata=metadata)
     assert result["dataset_counts"]["scaleedit"] == 3
 

@@ -50,7 +50,7 @@ export ASSET_ROOT=/large_disk/lumina_mixed4_assets
 export HF_HOME=/large_disk/lumina_mixed4_hf_cache
 ```
 
-四个训练数据自然 concat 后由 `DistributedSampler(shuffle=True)` 打乱；当前不使用 dataset-balanced sampler。source、target 和 GT mask 始终应用同一 deterministic geometry，再转为 32×32 Lumina VQ tokens。MagicBrush TEST 保持独立，不混入训练。
+四个训练数据自然 concat 后由 `DistributedSampler(shuffle=True)` 打乱；当前不使用 dataset-balanced sampler。source、target 和 GT mask 始终应用同一 deterministic Lumina aspect-ratio geometry：`target_size=512` 用于选择固定 token-budget 的矩形 bucket，而不是强制 512×512；随后得到可变 H×W VQ grid。token metadata 记录 crop 后 mask retention；crop 后为空的 mask 明确记为 `post_geometry_empty_mask` 并跳过。MagicBrush TEST 保持独立，不混入训练。
 
 ## 六组正式训练
 

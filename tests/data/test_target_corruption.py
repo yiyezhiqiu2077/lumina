@@ -99,6 +99,15 @@ def test_newline_mapping_is_row_major_and_never_supervised():
     assert labels[3] == labels[7] == -100
 
 
+def test_rectangular_lumina_grid_supports_both_corruption_modes_and_newlines():
+    source, target, mask = _payload((26, 38))
+    full = corrupt_target_spatial(source, target, mask, random.Random(4), "full_target")
+    hardlock = corrupt_target_spatial(source, target, mask, random.Random(4), "edit_region_hardlock")
+    assert len(full["tokens"]) == 26 * (38 + 1)
+    assert len(hardlock["tokens"]) == 26 * (38 + 1)
+    assert full["selected_spatial"].shape == hardlock["selected_spatial"].shape == (26, 38)
+
+
 class _Tokenizer:
     def __call__(self, text, **kwargs):
         return {"input_ids": [1, 9, 2] if text == "edit" else [1, 9, 2, 3]}
@@ -118,3 +127,16 @@ def test_dataset_is_reorder_invariant_and_fails_fast_on_empty_editregion(tmp_pat
     torch.save({"source_codes": source, "target_codes": target, "edit_mask": torch.zeros_like(mask), "token_height": 3, "token_width": 4}, token)
     with pytest.raises(ValueError, match="dataset_name=magicbrush sample_key=same"):
         EditTokenDataset(manifest, _Tokenizer(), condition_dropout=0, target_corruption_mode="edit_region_hardlock")[0]
+
+
+@pytest.mark.parametrize("mode", ("full_target", "edit_region_hardlock"))
+def test_dataset_assembles_variable_grid_source_and_target_sequences(mode, tmp_path):
+    source, target, mask = _payload((26, 38))
+    token = tmp_path / "rectangular.pt"
+    torch.save({"source_codes": source, "target_codes": target, "edit_mask": mask, "token_height": 26, "token_width": 38}, token)
+    manifest = tmp_path / "manifest.jsonl"
+    manifest.write_text('{"dataset_name":"crispedit","sample_key":"crispedit/rect","instruction":"edit","token_file":"rectangular.pt"}\n', encoding="utf-8")
+    item = EditTokenDataset(manifest, _Tokenizer(), condition_dropout=0, target_corruption_mode=mode)[0]
+    assert item["source_spatial_count"] == item["target_spatial_count"] == 26 * 38
+    assert item["source_newline_count"] == item["target_newline_count"] == 26
+    assert len(item["input_ids"]) == len(item["labels"]) == len(item["source_spatial_mask"])

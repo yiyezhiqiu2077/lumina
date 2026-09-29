@@ -67,8 +67,9 @@ def validate_train_config(args: argparse.Namespace) -> None:
             f"{args.nproc_per_node} * {args.batch_size} * {args.gradient_accumulation} "
             f"= {expected}, declared {args.global_batch_size}"
         )
-    if args.vq_grid != [32, 32]:
-        raise ValueError(f"MagicBrush vq_grid must be [32, 32], got {args.vq_grid}")
+    geometry = getattr(args, "image_geometry", {})
+    if geometry != {"policy": "lumina_aspect_ratio", "target_size": 512, "bucket_patch_size": 32, "max_ratio": 4.0}:
+        raise ValueError(f"unsupported mixed image geometry policy: {geometry}")
     if args.launcher != "torchrun" or args.rdzv != "standalone":
         raise ValueError(f"unsupported single-node launcher policy: launcher={args.launcher!r}, rdzv={args.rdzv!r}")
     if args.precision != "bf16":
@@ -217,7 +218,7 @@ def load_train_config(config_path: Path, resume_from_checkpoint: Path | None = N
         nproc_per_node=nproc_per_node,
         global_batch_size=int(distributed["global_batch_size"]),
         launcher=runtime_config["launcher"], rdzv=runtime_config["rdzv"], precision=runtime_config["precision"],
-        vq_grid=list(dataset_config["vq_grid"]),
+        image_geometry=dict(dataset_config["image_geometry"]),
         dataset_sample_count=sample_count,
         optimizer_steps_per_epoch=optimizer_steps_per_epoch,
         epochs=epochs,
@@ -255,4 +256,5 @@ def launch_summary(args: argparse.Namespace) -> dict:
         "optimizer_steps_per_epoch": args.optimizer_steps_per_epoch,
         "epochs": args.epochs,
         "target_corruption_mode": args.target_corruption_mode,
+        "image_geometry": args.image_geometry,
     }

@@ -73,7 +73,7 @@ def run_sequence_audit(model: Path, manifest: Path, *, seed: int = 42) -> dict:
         if row["source_spatial_count"] != height * width or row["target_spatial_count"] != height * width:
             raise AssertionError("spatial token count mismatch")
     missing = [kind for kind, values in orientation.items() if len(values) < 5]
-    return {"samples": len(dataset), "statistics": {key: _summary(values) for key, values in fields.items()}, "five_per_orientation": orientation, "missing_orientations": missing, "non_square_dataset_gate": "not_applicable_all_magicbrush_512_level_samples_are_square" if missing else "passed", "all_input_label_lengths_equal": True, "all_samples_have_valid_target_labels": True, "target_truncation_detected": False}
+    return {"samples": len(dataset), "statistics": {key: _summary(values) for key, values in fields.items()}, "five_per_orientation": orientation, "missing_orientations": missing, "non_square_dataset_gate": "insufficient_orientation_examples" if missing else "passed", "all_input_label_lengths_equal": True, "all_samples_have_valid_target_labels": True, "target_truncation_detected": False}
 
 
 def run_non_square_layout_audit() -> dict:
@@ -91,4 +91,4 @@ def run_non_square_layout_audit() -> dict:
             raise AssertionError(f"mask flatten orientation failed for {(height, width)}")
         return {"token_grid_hw": [height, width], "source_spatial_count": sum(spatial_flags), "reshape_count": height * width, "newline_count": len(newline_positions), "row_major_round_trip": True, "mask_orientation_round_trip": True}
     shapes = {"portrait": [(16, 8), (24, 12), (32, 16), (28, 14), (20, 10)], "landscape": [(8, 16), (12, 24), (16, 32), (14, 28), (10, 20)], "square": [(8, 8), (12, 12), (16, 16), (24, 24), (32, 32)]}
-    return {"scope": "synthetic layout fixtures only; MagicBrush 512-level samples are all square", "orientations": {kind: [audit_shape(*shape) for shape in values] for kind, values in shapes.items()}, "passed": True}
+    return {"scope": "synthetic variable-grid layout fixtures", "orientations": {kind: [audit_shape(*shape) for shape in values] for kind, values in shapes.items()}, "passed": True}
